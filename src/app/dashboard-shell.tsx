@@ -47,10 +47,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const ticketsActive =
-    pathname === "/dashboard/tickets" || pathname.startsWith("/dashboard/tickets/");
-  const usersActive = pathname.startsWith("/dashboard/users");
-  const rolesActive = pathname.startsWith("/dashboard/roles");
+  const ticketsActive = pathname === "/tickets" || pathname.startsWith("/tickets/");
+  const usersActive = pathname.startsWith("/users");
+  const rolesActive = pathname.startsWith("/roles");
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -62,19 +61,19 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </h1>
             <nav className="flex flex-wrap items-center gap-5" aria-label="Workspace">
               <Link
-                href="/dashboard/tickets"
+                href="/tickets"
                 className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(ticketsActive)}`}
               >
                 Tickets
               </Link>
               <Link
-                href="/dashboard/users"
+                href="/users"
                 className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(usersActive)}`}
               >
                 Users
               </Link>
               <Link
-                href="/dashboard/roles"
+                href="/roles"
                 className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
               >
                 Roles

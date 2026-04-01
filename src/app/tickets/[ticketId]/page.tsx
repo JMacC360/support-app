@@ -255,7 +255,7 @@ export default function TicketDetailsPage() {
         <div className="mx-auto w-full max-w-[1400px] space-y-4">
           <div className="flex items-center justify-between">
             <Link
-              href="/dashboard/tickets"
+              href="/tickets"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-primary hover:underline"
             >
               <ArrowLeft className="size-4" />

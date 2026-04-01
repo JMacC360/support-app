@@ -171,7 +171,7 @@ export default function UsersPage() {
                 </p>
               </div>
               <div>
-                <Button type="button" className="text-sm font-semibold" onClick={() => router.push("/dashboard/users/new")}>
+                <Button type="button" className="text-sm font-semibold" onClick={() => router.push("/users/new")}>
                   Add New User
                 </Button>
               </div>

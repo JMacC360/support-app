@@ -2,22 +2,16 @@
 
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketTableStatus } from "@/components/ticket-table-status";
 import { Button } from "@/components/ui/button";
 import {
   categories,
-  getAutoAssignee,
-  loadCurrentUser,
   loadTickets,
-  newTicketId,
   priorities,
   priorityPillClass,
-  roles,
-  saveTickets,
   statuses,
-  type Role,
   type Ticket,
   type TicketCategory,
   type TicketPriority,
@@ -61,21 +55,12 @@ export default function TicketsPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
 
-  const [subject, setSubject] = useState("");
-  const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<TicketCategory>("Technical");
-  const [priority, setPriority] = useState<TicketPriority>("Medium");
-  const [attachmentInput, setAttachmentInput] = useState("");
-  const [assignmentMode, setAssignmentMode] = useState<"Auto" | "Manual">("Auto");
-  const [manualAssignee, setManualAssignee] = useState<Role>("L1 Support");
-
   const [statusFilter, setStatusFilter] = useState<"All" | TicketStatus>("All");
   const [categoryFilter, setCategoryFilter] = useState<"All" | TicketCategory>("All");
   const [priorityFilter, setPriorityFilter] = useState<"All" | TicketPriority>("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
-  const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -156,47 +141,6 @@ export default function TicketsPage() {
     [tickets]
   );
 
-  const handleCreateTicket = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const currentUser = loadCurrentUser();
-    if (!currentUser) return;
-    if (!subject.trim() || !description.trim()) return;
-
-    const attachments = attachmentInput
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    const assignedTo =
-      assignmentMode === "Auto" ? getAutoAssignee(category, priority) : manualAssignee;
-    const nextNumber = tickets.length + 1;
-    const createdTicket: Ticket = {
-      id: newTicketId(nextNumber),
-      subject: subject.trim(),
-      description: description.trim(),
-      createdAt: new Date().toLocaleString(),
-      category,
-      priority,
-      status: "Open",
-      attachments,
-      createdBy: currentUser,
-      assignedTo,
-      escalated: false,
-      replies: [],
-    };
-
-    const nextTickets = [createdTicket, ...tickets];
-    setTickets(nextTickets);
-    saveTickets(nextTickets);
-    setSubject("");
-    setDescription("");
-    setCategory("Technical");
-    setPriority("Medium");
-    setAttachmentInput("");
-    setAssignmentMode("Auto");
-    setManualAssignee("L1 Support");
-    setIsCreatePanelOpen(false);
-  };
-
   if (!isHydrated) {
     return (
       <main className="flex min-h-[40vh] items-center justify-center p-6">
@@ -219,9 +163,11 @@ export default function TicketsPage() {
                   Manage and prioritize incoming support requests across all departments.
                 </p>
               </div>
-              {/* <div>
-                <Button onClick={() => setIsCreatePanelOpen(true)}>Create Ticket</Button>
-              </div> */}
+              <div>
+                <Button onClick={() => router.push("/tickets/create")}>
+                  Create New Ticket
+                </Button>
+              </div>
             </div>
           </header>
 
@@ -340,11 +286,11 @@ export default function TicketsPage() {
                             key={ticket.id}
                             role="link"
                             tabIndex={0}
-                            onClick={() => router.push(`/dashboard/tickets/${ticket.id}`)}
+                            onClick={() => router.push(`/tickets/${ticket.id}`)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter" || event.key === " ") {
                                 event.preventDefault();
-                                router.push(`/dashboard/tickets/${ticket.id}`);
+                                router.push(`/tickets/${ticket.id}`);
                               }
                             }}
                             className="cursor-pointer border-t border-slate-100 hover:bg-slate-50 focus-visible:bg-slate-100 focus-visible:outline-none"
@@ -458,117 +404,6 @@ export default function TicketsPage() {
         </div>
       </section>
 
-      {isCreatePanelOpen ? (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <button
-            type="button"
-            aria-label="Close create ticket panel"
-            className="h-full flex-1 bg-slate-900/40"
-            onClick={() => setIsCreatePanelOpen(false)}
-          />
-          <aside className="h-full w-full max-w-xl overflow-auto border-l border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-900">Create Ticket</h3>
-              <Button variant="outline" onClick={() => setIsCreatePanelOpen(false)}>
-                Close
-              </Button>
-            </div>
-            <form className="grid gap-3" onSubmit={handleCreateTicket}>
-              <input
-                id="subject"
-                className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                placeholder="Subject / Title"
-                value={subject}
-                onChange={(event) => setSubject(event.target.value)}
-              />
-              <textarea
-                id="description"
-                className="min-h-24 w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                placeholder="Description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-              <div className="grid gap-3 sm:grid-cols-2">
-                <select
-                  id="category"
-                  className="rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                  value={category}
-                  onChange={(event) =>
-                    setCategory(event.target.value as TicketCategory)
-                  }
-                >
-                  {categories.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  id="priority"
-                  className="rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                  value={priority}
-                  onChange={(event) =>
-                    setPriority(event.target.value as TicketPriority)
-                  }
-                >
-                  {priorities.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <input
-                id="attachments"
-                className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                placeholder="Attachments (comma-separated)"
-                value={attachmentInput}
-                onChange={(event) => setAttachmentInput(event.target.value)}
-              />
-              <div className="grid gap-3 sm:grid-cols-2">
-                <select
-                  id="assignment-mode"
-                  className="rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-                  value={assignmentMode}
-                  onChange={(event) =>
-                    setAssignmentMode(event.target.value as "Auto" | "Manual")
-                  }
-                >
-                  <option value="Auto">Auto Assignment</option>
-                  <option value="Manual">Manual Assignment</option>
-                </select>
-                <select
-                  id="assigned-to"
-                  className="rounded-none border border-slate-200 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                  value={
-                    assignmentMode === "Auto"
-                      ? getAutoAssignee(category, priority)
-                      : manualAssignee
-                  }
-                  disabled={assignmentMode === "Auto"}
-                  onChange={(event) => setManualAssignee(event.target.value as Role)}
-                >
-                  {roles.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setIsCreatePanelOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit">Create Ticket</Button>
-              </div>
-            </form>
-          </aside>
-        </div>
-      ) : null}
     </>
   );
 }

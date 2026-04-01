@@ -63,10 +63,10 @@ export default function NewRolePage() {
     setPermissions((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const handleCancel = () => router.push("/dashboard/roles");
+  const handleCancel = () => router.push("/roles");
 
   const handleSave = () => {
-    router.push("/dashboard/roles");
+    router.push("/roles");
   };
 
   const cancelButtonClass =

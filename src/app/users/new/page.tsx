@@ -71,7 +71,7 @@ export default function NewUserPage() {
       role,
       status: "Active",
     });
-    router.push("/dashboard/users");
+    router.push("/users");
   };
 
   const togglePermission = (key: PermissionKey) => {
@@ -135,7 +135,7 @@ export default function NewUserPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => router.push("/dashboard/users")}
+                    onClick={() => router.push("/users")}
                   >
                     Discard
                   </Button>

@@ -1,6 +1,6 @@
-import { DashboardShell } from "./dashboard-shell";
+import { DashboardShell } from "@/app/dashboard-shell";
 
-export default function DashboardLayout({
+export default function UsersLayout({
   children,
 }: {
   children: React.ReactNode;

@@ -205,7 +205,7 @@ export default function RolesConfigurationPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button type="button" className="text-sm font-semibold" onClick={() => router.push("/dashboard/roles/new")}>
+            <Button type="button" className="text-sm font-semibold" onClick={() => router.push("/roles/new")}>
               Create New Role
             </Button>
           </div>

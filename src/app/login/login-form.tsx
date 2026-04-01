@@ -5,16 +5,16 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { loadCurrentUser, saveCurrentUser } from "@/lib/tickets";
 
-/** Only allow in-app paths under /dashboard (open redirect safe). */
+/** Only allow in-app paths under known app routes (open redirect safe). */
 function safeRedirectPath(raw: string | null): string {
-  if (!raw) return "/dashboard/tickets";
+  if (!raw) return "/tickets";
   try {
     const decoded = decodeURIComponent(raw);
-    if (!decoded.startsWith("/") || decoded.startsWith("//")) return "/dashboard/tickets";
-    if (!decoded.startsWith("/dashboard")) return "/dashboard/tickets";
+    if (!decoded.startsWith("/") || decoded.startsWith("//")) return "/tickets";
+    if (!decoded.startsWith("/tickets") && !decoded.startsWith("/users") && !decoded.startsWith("/roles")) return "/tickets";
     return decoded;
   } catch {
-    return "/dashboard/tickets";
+    return "/tickets";
   }
 }
 

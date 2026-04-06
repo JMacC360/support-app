@@ -27,9 +27,33 @@ export type Ticket = {
   status: TicketStatus;
   attachments: string[];
   createdBy: string;
+  ownerUserId: string;
+  ownerOrgId: string;
+  organizationId: string;
+  parentOrganizationId: string | null;
   assignedTo: Role;
   escalated: boolean;
+  escalatedToAdminAt?: string;
+  escalationReason?: string;
   replies: Reply[];
+};
+
+export type AccessLevel =
+  | "Admin"
+  | "Sub-Franchisor"
+  | "Franchisee"
+  | "Retailer"
+  | "B2B Client"
+  | "Support Team Lead";
+
+export type DemoAccount = {
+  userId: string;
+  email: string;
+  password: string;
+  accessLevel: AccessLevel;
+  displayName: string;
+  organizationId: string;
+  parentOrganizationId: string | null;
 };
 
 export const categories: TicketCategory[] = [
@@ -101,8 +125,103 @@ export const priorityTintedBorderClass: Record<TicketPriority, string> = {
 
 const TICKETS_STORAGE_KEY = "support-ticket-app:tickets";
 const USER_STORAGE_KEY = "support-ticket-app:user";
+const DEMO_ADMIN_EMAIL = "admin@esarisari.net";
+const DEMO_ADMIN_PASSWORD = "password123";
+const ORG_HIERARCHY: Record<string, string | null> = {
+  "ORG-HQ": null,
+  "ORG-SUB-001": "ORG-HQ",
+  "ORG-FRN-001": "ORG-SUB-001",
+  "ORG-RTL-001": "ORG-FRN-001",
+  "ORG-B2B-001": "ORG-FRN-001",
+  "ORG-OPS-001": "ORG-HQ",
+};
 
-const initialTickets: Ticket[] = [
+const DEMO_ACCOUNTS: DemoAccount[] = [
+  {
+    userId: "USR-0001",
+    email: DEMO_ADMIN_EMAIL,
+    password: DEMO_ADMIN_PASSWORD,
+    accessLevel: "Admin",
+    displayName: "Demo Admin",
+    organizationId: "ORG-HQ",
+    parentOrganizationId: null,
+  },
+  {
+    userId: "USR-0002",
+    email: "subfranchisor@esarisari.net",
+    password: "password123",
+    accessLevel: "Sub-Franchisor",
+    displayName: "Sub-Franchisor Demo",
+    organizationId: "ORG-SUB-001",
+    parentOrganizationId: "ORG-HQ",
+  },
+  {
+    userId: "USR-0003",
+    email: "franchisee@esarisari.net",
+    password: "password123",
+    accessLevel: "Franchisee",
+    displayName: "Franchisee Demo",
+    organizationId: "ORG-FRN-001",
+    parentOrganizationId: "ORG-SUB-001",
+  },
+  {
+    userId: "USR-0004",
+    email: "retailer@esarisari.net",
+    password: "password123",
+    accessLevel: "Retailer",
+    displayName: "Retailer Demo",
+    organizationId: "ORG-RTL-001",
+    parentOrganizationId: "ORG-FRN-001",
+  },
+  {
+    userId: "USR-0005",
+    email: "b2b@esarisari.net",
+    password: "password123",
+    accessLevel: "B2B Client",
+    displayName: "B2B Client Demo",
+    organizationId: "ORG-B2B-001",
+    parentOrganizationId: "ORG-FRN-001",
+  },
+  {
+    userId: "USR-0006",
+    email: "supportlead@esarisari.net",
+    password: "password123",
+    accessLevel: "Support Team Lead",
+    displayName: "Support Team Lead Demo",
+    organizationId: "ORG-OPS-001",
+    parentOrganizationId: "ORG-HQ",
+  },
+];
+
+type SeedTicket = Omit<
+  Ticket,
+  "ownerUserId" | "ownerOrgId" | "organizationId" | "parentOrganizationId"
+> &
+  Partial<
+    Pick<
+      Ticket,
+      | "ownerUserId"
+      | "ownerOrgId"
+      | "organizationId"
+      | "parentOrganizationId"
+      | "escalatedToAdminAt"
+      | "escalationReason"
+    >
+  >;
+
+function enrichTicketOwnership(ticket: SeedTicket): Ticket {
+  const owner = getDemoAccountByEmail(ticket.createdBy);
+  return {
+    ...ticket,
+    ownerUserId: ticket.ownerUserId ?? owner?.userId ?? "USR-UNKNOWN",
+    ownerOrgId: ticket.ownerOrgId ?? owner?.organizationId ?? "ORG-HQ",
+    organizationId: ticket.organizationId ?? owner?.organizationId ?? "ORG-HQ",
+    parentOrganizationId:
+      ticket.parentOrganizationId ?? owner?.parentOrganizationId ?? ORG_HIERARCHY["ORG-HQ"],
+  };
+}
+
+const seedTickets: SeedTicket[] = [
   {
     id: "TCK-0001",
     subject: "Cannot access billing invoice",
@@ -112,7 +231,7 @@ const initialTickets: Ticket[] = [
     priority: "Medium",
     status: "Open",
     attachments: ["screenshot-invoice.png"],
-    createdBy: "sara@company.com",
+    createdBy: "retailer@esarisari.net",
     assignedTo: "Billing Team",
     escalated: false,
     replies: [
@@ -134,7 +253,7 @@ const initialTickets: Ticket[] = [
     priority: "High",
     status: "In Progress",
     attachments: ["password-reset.png"],
-    createdBy: "james@ozdesigns.com",
+    createdBy: "b2b@esarisari.net",
     assignedTo: "L2 Support",
     escalated: false,
     replies: [],
@@ -148,7 +267,7 @@ const initialTickets: Ticket[] = [
     priority: "Medium",
     status: "Pending",
     attachments: ["performance-log.txt"],
-    createdBy: "mia@acmecorp.com",
+    createdBy: "franchisee@esarisari.net",
     assignedTo: "Product Specialist",
     escalated: false,
     replies: [
@@ -170,7 +289,7 @@ const initialTickets: Ticket[] = [
     priority: "High",
     status: "Resolved",
     attachments: ["invoice-vat.pdf"],
-    createdBy: "alex@northwind.io",
+    createdBy: "subfranchisor@esarisari.net",
     assignedTo: "Billing Team",
     escalated: true,
     replies: [
@@ -192,7 +311,7 @@ const initialTickets: Ticket[] = [
     priority: "Low",
     status: "Open",
     attachments: [],
-    createdBy: "support@brightleaf.dev",
+    createdBy: "retailer@esarisari.net",
     assignedTo: "L1 Support",
     escalated: false,
     replies: [],
@@ -206,7 +325,7 @@ const initialTickets: Ticket[] = [
     priority: "High",
     status: "In Progress",
     attachments: ["api-errors.log"],
-    createdBy: "ops@starlite.ai",
+    createdBy: "supportlead@esarisari.net",
     assignedTo: "L2 Support",
     escalated: false,
     replies: [
@@ -228,7 +347,7 @@ const initialTickets: Ticket[] = [
     priority: "Low",
     status: "Closed",
     attachments: [],
-    createdBy: "admin@heliumlabs.com",
+    createdBy: "admin@esarisari.net",
     assignedTo: "L1 Support",
     escalated: false,
     replies: [
@@ -250,7 +369,7 @@ const initialTickets: Ticket[] = [
     priority: "Medium",
     status: "Open",
     attachments: ["iphone-se.png"],
-    createdBy: "qa@pixelnest.co",
+    createdBy: "franchisee@esarisari.net",
     assignedTo: "Product Specialist",
     escalated: false,
     replies: [],
@@ -264,7 +383,7 @@ const initialTickets: Ticket[] = [
     priority: "Low",
     status: "Pending",
     attachments: [],
-    createdBy: "care@alpenglow.io",
+    createdBy: "b2b@esarisari.net",
     assignedTo: "Billing Team",
     escalated: false,
     replies: [],
@@ -278,7 +397,7 @@ const initialTickets: Ticket[] = [
     priority: "High",
     status: "In Progress",
     attachments: ["saml-trace.txt"],
-    createdBy: "it@oakridge.group",
+    createdBy: "subfranchisor@esarisari.net",
     assignedTo: "L2 Support",
     escalated: true,
     replies: [
@@ -291,7 +410,215 @@ const initialTickets: Ticket[] = [
       },
     ],
   },
+  {
+    id: "TCK-0011",
+    subject: "POS terminal cannot sync end-of-day sales",
+    description: "Retail terminal fails to sync after closing shift with timeout code 504.",
+    createdAt: "2026-01-17 09:14",
+    category: "Technical",
+    priority: "High",
+    status: "Open",
+    attachments: ["pos-sync-error.jpg"],
+    createdBy: "retailer@esarisari.net",
+    assignedTo: "L2 Support",
+    escalated: false,
+    replies: [],
+  },
+  {
+    id: "TCK-0012",
+    subject: "Need onboarding checklist for new outlet",
+    description: "Requesting account and setup checklist for a newly opened branch.",
+    createdAt: "2026-01-17 11:28",
+    category: "Account",
+    priority: "Low",
+    status: "Pending",
+    attachments: [],
+    createdBy: "retailer@esarisari.net",
+    assignedTo: "L1 Support",
+    escalated: false,
+    replies: [
+      {
+        id: "r-12-1",
+        visibility: "Public",
+        author: "L1 Support",
+        message: "Checklist template shared. Waiting for branch details.",
+        createdAt: "2026-01-17 13:02",
+      },
+    ],
+  },
+  {
+    id: "TCK-0013",
+    subject: "Bulk order portal showing stale inventory",
+    description: "B2B catalog still shows out-of-date stock numbers after nightly sync.",
+    createdAt: "2026-01-18 08:42",
+    category: "Technical",
+    priority: "Medium",
+    status: "In Progress",
+    attachments: ["inventory-mismatch.csv"],
+    createdBy: "b2b@esarisari.net",
+    assignedTo: "Product Specialist",
+    escalated: false,
+    replies: [],
+  },
+  {
+    id: "TCK-0014",
+    subject: "Request duplicate billing statement",
+    description: "Need a duplicate statement for January consolidated billing.",
+    createdAt: "2026-01-18 15:33",
+    category: "Billing",
+    priority: "Low",
+    status: "Resolved",
+    attachments: [],
+    createdBy: "b2b@esarisari.net",
+    assignedTo: "Billing Team",
+    escalated: false,
+    replies: [
+      {
+        id: "r-14-1",
+        visibility: "Public",
+        author: "Billing Team",
+        message: "Duplicate statement generated and sent to your billing contact.",
+        createdAt: "2026-01-19 10:21",
+      },
+    ],
+  },
+  {
+    id: "TCK-0015",
+    subject: "Regional report export fails for subordinate stores",
+    description: "Export action fails when including all stores under assigned franchise.",
+    createdAt: "2026-01-19 09:50",
+    category: "General",
+    priority: "Medium",
+    status: "Open",
+    attachments: ["regional-export-error.png"],
+    createdBy: "franchisee@esarisari.net",
+    assignedTo: "Product Specialist",
+    escalated: false,
+    replies: [],
+  },
+  {
+    id: "TCK-0016",
+    subject: "Need reset of inactive cashier account",
+    description: "Cashier account became locked after too many failed login attempts.",
+    createdAt: "2026-01-19 14:08",
+    category: "Access",
+    priority: "Medium",
+    status: "Closed",
+    attachments: [],
+    createdBy: "franchisee@esarisari.net",
+    assignedTo: "L1 Support",
+    escalated: false,
+    replies: [
+      {
+        id: "r-16-1",
+        visibility: "Public",
+        author: "L1 Support",
+        message: "Account unlocked and temporary password issued.",
+        createdAt: "2026-01-19 15:16",
+      },
+    ],
+  },
+  {
+    id: "TCK-0017",
+    subject: "Hierarchy mapping incorrect for newly onboarded franchisee",
+    description: "A newly onboarded franchisee appears under the wrong regional tree.",
+    createdAt: "2026-01-20 10:12",
+    category: "Account",
+    priority: "High",
+    status: "Pending",
+    attachments: ["hierarchy-map.pdf"],
+    createdBy: "subfranchisor@esarisari.net",
+    assignedTo: "L2 Support",
+    escalated: true,
+    escalatedToAdminAt: "2026-01-20 12:05",
+    escalationReason: "Impacts multiple subordinate entities and reporting scope.",
+    replies: [
+      {
+        id: "r-17-1",
+        visibility: "Internal",
+        author: "subfranchisor@esarisari.net",
+        message: "Escalated to Admin due to cross-franchise impact.",
+        createdAt: "2026-01-20 12:05",
+      },
+    ],
+  },
+  {
+    id: "TCK-0018",
+    subject: "Role policy clarification for regional agents",
+    description: "Need confirmation on allowable actions for regional support users.",
+    createdAt: "2026-01-20 16:37",
+    category: "General",
+    priority: "Low",
+    status: "Open",
+    attachments: [],
+    createdBy: "subfranchisor@esarisari.net",
+    assignedTo: "L1 Support",
+    escalated: false,
+    replies: [],
+  },
+  {
+    id: "TCK-0019",
+    subject: "Ticket routing rule sends billing issues to wrong queue",
+    description: "Billing-tagged tickets are incorrectly routed to L1 instead of Billing Team.",
+    createdAt: "2026-01-21 09:02",
+    category: "Billing",
+    priority: "High",
+    status: "In Progress",
+    attachments: ["routing-rules.json"],
+    createdBy: "supportlead@esarisari.net",
+    assignedTo: "L2 Support",
+    escalated: false,
+    replies: [
+      {
+        id: "r-19-1",
+        visibility: "Internal",
+        author: "supportlead@esarisari.net",
+        message: "Workaround applied while permanent routing fix is validated.",
+        createdAt: "2026-01-21 10:18",
+      },
+    ],
+  },
+  {
+    id: "TCK-0020",
+    subject: "SLA dashboard missing escalated ticket counts",
+    description: "Escalated ticket metrics are not visible in the weekly SLA snapshot.",
+    createdAt: "2026-01-21 13:46",
+    category: "Technical",
+    priority: "Medium",
+    status: "Pending",
+    attachments: ["sla-dashboard.png"],
+    createdBy: "supportlead@esarisari.net",
+    assignedTo: "Product Specialist",
+    escalated: false,
+    replies: [],
+  },
+  {
+    id: "TCK-0021",
+    subject: "Barcode scanner disconnects during checkout",
+    description: "Scanner randomly disconnects after 2-3 transactions and needs reconnection.",
+    createdAt: "2026-01-22 09:18",
+    category: "Technical",
+    priority: "Medium",
+    status: "Open",
+    attachments: ["scanner-disconnect-log.txt"],
+    createdBy: "retailer@esarisari.net",
+    assignedTo: "L1 Support",
+    escalated: false,
+    replies: [
+      {
+        id: "r-21-1",
+        visibility: "Public",
+        author: "L1 Support",
+        message: "Please share scanner firmware version and USB port type for diagnosis.",
+        createdAt: "2026-01-22 09:42",
+      },
+    ],
+  },
 ];
+
+const initialTickets: Ticket[] = seedTickets.map((ticket) =>
+  enrichTicketOwnership(ticket)
+);
 
 export function getAutoAssignee(category: TicketCategory, priority: TicketPriority): Role {
   if (category === "Billing") return "Billing Team";
@@ -311,10 +638,12 @@ export function loadTickets(): Ticket[] {
   try {
     const parsed = JSON.parse(raw) as Ticket[];
     if (!Array.isArray(parsed) || parsed.length === 0) return initialTickets;
-    const normalizedParsed = parsed.map((ticket) => ({
-      ...ticket,
-      createdAt: ticket.createdAt ?? ticket.replies?.[0]?.createdAt ?? "2026-01-07 17:22",
-    }));
+    const normalizedParsed = parsed.map((ticket) =>
+      enrichTicketOwnership({
+        ...ticket,
+        createdAt: ticket.createdAt ?? ticket.replies?.[0]?.createdAt ?? "2026-01-07 17:22",
+      })
+    );
     const byId = new Map(normalizedParsed.map((ticket) => [ticket.id, ticket]));
     for (const seedTicket of initialTickets) {
       if (!byId.has(seedTicket.id)) {
@@ -339,12 +668,155 @@ export function loadCurrentUser() {
 
 export function saveCurrentUser(user: string) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(USER_STORAGE_KEY, user);
+  window.localStorage.setItem(USER_STORAGE_KEY, normalizeUserEmail(user));
 }
 
 export function clearCurrentUser() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(USER_STORAGE_KEY);
+}
+
+export function normalizeUserEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+export function isDemoAdmin(userEmail: string | null | undefined) {
+  if (!userEmail) return false;
+  return normalizeUserEmail(userEmail) === DEMO_ADMIN_EMAIL;
+}
+
+export function isDemoAdminCredentials(email: string, password: string) {
+  return (
+    normalizeUserEmail(email) === DEMO_ADMIN_EMAIL &&
+    password.trim() === DEMO_ADMIN_PASSWORD
+  );
+}
+
+export function getDemoAccountByEmail(email: string | null | undefined) {
+  if (!email) return null;
+  const normalizedEmail = normalizeUserEmail(email);
+  return DEMO_ACCOUNTS.find((account) => account.email === normalizedEmail) ?? null;
+}
+
+export function getAllDemoAccounts() {
+  return [...DEMO_ACCOUNTS];
+}
+
+export function isValidDemoCredentials(email: string, password: string) {
+  const account = getDemoAccountByEmail(email);
+  if (!account) return false;
+  return account.password === password.trim();
+}
+
+export function getUserAccessLevel(
+  userEmail: string | null | undefined
+): AccessLevel | null {
+  return getDemoAccountByEmail(userEmail)?.accessLevel ?? null;
+}
+
+export function getCurrentUserContext(userEmail: string | null | undefined) {
+  const account = getDemoAccountByEmail(userEmail);
+  if (!account) return null;
+  return {
+    userId: account.userId,
+    organizationId: account.organizationId,
+    parentOrganizationId: account.parentOrganizationId,
+    accessLevel: account.accessLevel,
+    email: account.email,
+    displayName: account.displayName,
+  };
+}
+
+export function canCreateTickets(userEmail: string | null | undefined) {
+  const accessLevel = getUserAccessLevel(userEmail);
+  return accessLevel !== null;
+}
+
+export function canAssignTickets(userEmail: string | null | undefined) {
+  const accessLevel = getUserAccessLevel(userEmail);
+  return accessLevel === "Admin" || accessLevel === "Support Team Lead";
+}
+
+export function canManageTicketLifecycle(userEmail: string | null | undefined) {
+  const accessLevel = getUserAccessLevel(userEmail);
+  return accessLevel === "Admin" || accessLevel === "Support Team Lead";
+}
+
+export function canViewInternalNotes(userEmail: string | null | undefined) {
+  const accessLevel = getUserAccessLevel(userEmail);
+  return accessLevel === "Admin" || accessLevel === "Support Team Lead";
+}
+
+export function canViewTicket(
+  userEmail: string | null | undefined,
+  ticket: Ticket
+) {
+  const user = getCurrentUserContext(userEmail);
+  if (!user) return false;
+  if (user.accessLevel === "Admin" || user.accessLevel === "Support Team Lead") return true;
+  if (user.accessLevel === "Retailer" || user.accessLevel === "B2B Client") {
+    return ticket.ownerUserId === user.userId;
+  }
+  if (user.accessLevel === "Franchisee" || user.accessLevel === "Sub-Franchisor") {
+    if (ticket.ownerUserId === user.userId) return true;
+    return isOrganizationWithinScope(ticket.ownerOrgId, user.organizationId);
+  }
+  return false;
+}
+
+export function getVisibleTicketsForUser(
+  userEmail: string | null | undefined,
+  tickets: Ticket[]
+) {
+  return tickets.filter((ticket) => canViewTicket(userEmail, ticket));
+}
+
+export function getSubordinateTicketsForUser(
+  userEmail: string | null | undefined,
+  tickets: Ticket[]
+) {
+  const user = getCurrentUserContext(userEmail);
+  if (!user) return [];
+  if (user.accessLevel !== "Franchisee" && user.accessLevel !== "Sub-Franchisor") {
+    return [];
+  }
+  return tickets.filter((ticket) => {
+    if (ticket.ownerUserId === user.userId) return false;
+    return isOrganizationWithinScope(ticket.ownerOrgId, user.organizationId);
+  });
+}
+
+export function canAccessWorkspacePath(
+  userEmail: string | null | undefined,
+  pathname: string
+) {
+  const accessLevel = getUserAccessLevel(userEmail);
+  if (!accessLevel) return false;
+  if (pathname.startsWith("/tickets")) return true;
+  if (pathname.startsWith("/users") || pathname.startsWith("/roles")) {
+    return accessLevel === "Admin";
+  }
+  return false;
+}
+
+function isOrganizationWithinScope(candidateOrgId: string, ownerOrgId: string) {
+  let cursor: string | null | undefined = candidateOrgId;
+  while (cursor) {
+    if (cursor === ownerOrgId) return true;
+    cursor = ORG_HIERARCHY[cursor];
+  }
+  return false;
+}
+
+export function canEscalateTicketToAdmin(
+  userEmail: string | null | undefined,
+  ticket: Ticket
+) {
+  const user = getCurrentUserContext(userEmail);
+  if (!user) return false;
+  if (user.accessLevel !== "Sub-Franchisor") return false;
+  if (!canViewTicket(userEmail, ticket)) return false;
+  return !ticket.escalated;
 }
 
 export function getTicketLastActivity(ticket: Ticket) {

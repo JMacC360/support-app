@@ -7,7 +7,10 @@ import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketTableStatus } from "@/components/ticket-table-status";
 import { Button } from "@/components/ui/button";
 import {
+  canCreateTickets,
   categories,
+  getVisibleTicketsForUser,
+  loadCurrentUser,
   loadTickets,
   priorities,
   priorityPillClass,
@@ -52,6 +55,7 @@ function getVisiblePageNumbers(
 
 export default function TicketsPage() {
   const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
 
@@ -64,15 +68,21 @@ export default function TicketsPage() {
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
+      setCurrentUser(loadCurrentUser());
       setTickets(loadTickets());
       setIsHydrated(true);
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
+  const visibleTickets = useMemo(
+    () => getVisibleTicketsForUser(currentUser, tickets),
+    [currentUser, tickets]
+  );
+
   const filteredTickets = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    return tickets.filter((ticket) => {
+    return visibleTickets.filter((ticket) => {
       const matchesStatus = statusFilter === "All" || ticket.status === statusFilter;
       const matchesCategory =
         categoryFilter === "All" || ticket.category === categoryFilter;
@@ -90,7 +100,7 @@ export default function TicketsPage() {
 
       return matchesStatus && matchesCategory && matchesPriority && matchesSearch;
     });
-  }, [tickets, statusFilter, categoryFilter, priorityFilter, searchTerm]);
+  }, [visibleTickets, statusFilter, categoryFilter, priorityFilter, searchTerm]);
 
   const totalFiltered = filteredTickets.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize) || 1);
@@ -130,15 +140,15 @@ export default function TicketsPage() {
       {
         key: "All" as "All" | TicketStatus,
         label: "All",
-        count: tickets.length,
+        count: visibleTickets.length,
       },
       ...statuses.map((status) => ({
         key: status as "All" | TicketStatus,
         label: status,
-        count: tickets.filter((ticket) => ticket.status === status).length,
+        count: visibleTickets.filter((ticket) => ticket.status === status).length,
       })),
     ],
-    [tickets]
+    [visibleTickets]
   );
 
   if (!isHydrated) {
@@ -164,9 +174,11 @@ export default function TicketsPage() {
                 </p>
               </div>
               <div>
-                <Button onClick={() => router.push("/tickets/create")}>
-                  Create New Ticket
-                </Button>
+                {canCreateTickets(currentUser) ? (
+                  <Button onClick={() => router.push("/tickets/create")}>
+                    Create New Ticket
+                  </Button>
+                ) : null}
               </div>
             </div>
           </header>

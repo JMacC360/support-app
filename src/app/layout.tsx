@@ -16,6 +16,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "eSariSari Support Desk",
   description: "eSariSari Support Desk — support ticket dashboard",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({

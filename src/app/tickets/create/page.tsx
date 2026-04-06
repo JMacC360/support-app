@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { FileUp, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  canCreateTickets,
   categories,
+  getCurrentUserContext,
   loadCurrentUser,
   loadTickets,
   newTicketId,
@@ -20,6 +22,8 @@ import {
 
 export default function CreateTicketPage() {
   const router = useRouter();
+  const currentUser = loadCurrentUser();
+  const currentUserContext = getCurrentUserContext(currentUser);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<TicketCategory>("Technical");
@@ -31,8 +35,9 @@ export default function CreateTicketPage() {
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const currentUser = loadCurrentUser();
     if (!currentUser) return;
+    if (!canCreateTickets(currentUser)) return;
+    if (!currentUserContext) return;
     if (!subject.trim() || !description.trim()) return;
 
     const existingTickets = loadTickets();
@@ -52,6 +57,10 @@ export default function CreateTicketPage() {
       status: "Open",
       attachments,
       createdBy: currentUser,
+      ownerUserId: currentUserContext.userId,
+      ownerOrgId: currentUserContext.organizationId,
+      organizationId: currentUserContext.organizationId,
+      parentOrganizationId: currentUserContext.parentOrganizationId,
       assignedTo: resolvedAssignee,
       escalated: false,
       replies: [],
@@ -85,7 +94,7 @@ export default function CreateTicketPage() {
                   </label>
                   <input
                     id="subject"
-                    className="w-full border-0 border-b border-slate-300 bg-transparent px-0 py-2 text-lg text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                    className="w-full border-0 border-b border-slate-300 bg-transparent px-0 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                     placeholder="Brief summary of your request"
                     value={subject}
                     onChange={(event) => setSubject(event.target.value)}

@@ -43,7 +43,7 @@ export default function NewUserPage() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<UserRole>("L1 Support");
+  const [role, setRole] = useState<UserRole>("Retailer");
   const [organizationSearch, setOrganizationSearch] = useState("");
   const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
     viewFinancialReports: true,

@@ -1,10 +1,16 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { clearCurrentUser, loadCurrentUser } from "@/lib/tickets";
+import {
+  canAccessWorkspacePath,
+  clearCurrentUser,
+  isDemoAdmin,
+  loadCurrentUser,
+} from "@/lib/tickets";
 
 function navClass(active: boolean) {
   return active
@@ -31,6 +37,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   }, [ready, currentUser, router]);
 
+  useEffect(() => {
+    if (!ready || !currentUser) return;
+    if (!canAccessWorkspacePath(currentUser, pathname)) {
+      router.replace("/tickets");
+    }
+  }, [ready, currentUser, pathname, router]);
+
   if (!ready) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -50,15 +63,27 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const ticketsActive = pathname === "/tickets" || pathname.startsWith("/tickets/");
   const usersActive = pathname.startsWith("/users");
   const rolesActive = pathname.startsWith("/roles");
+  const hasAdminAccess = isDemoAdmin(currentUser);
 
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white px-4 py-3 lg:px-6">
         <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-6">
-            <h1 className="text-xl font-extrabold tracking-tight text-slate-900">
-              eSariSari Support Desk
-            </h1>
+          <div className="flex min-w-0 items-center gap-4">
+            <Link
+              href="/tickets"
+              className="flex min-w-0 shrink-0 items-center leading-none"
+              aria-label="eSariSari Support Desk"
+            >
+              <Image
+                src="/esarisari-support-desk-logo-standard.png"
+                alt="eSariSari"
+                width={600}
+                height={207}
+                className="block h-9 w-auto max-w-[min(52vw,200px)] align-middle"
+                priority
+              />
+            </Link>
             <nav className="flex flex-wrap items-center gap-5" aria-label="Workspace">
               <Link
                 href="/tickets"
@@ -66,18 +91,22 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               >
                 Tickets
               </Link>
-              <Link
-                href="/users"
-                className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(usersActive)}`}
-              >
-                Users
-              </Link>
-              <Link
-                href="/roles"
-                className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
-              >
-                Roles
-              </Link>
+              {hasAdminAccess ? (
+                <>
+                  <Link
+                    href="/users"
+                    className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(usersActive)}`}
+                  >
+                    Users
+                  </Link>
+                  <Link
+                    href="/roles"
+                    className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
+                  >
+                    Roles
+                  </Link>
+                </>
+              ) : null}
             </nav>
           </div>
           <div className="flex items-center gap-3">

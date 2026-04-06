@@ -9,6 +9,11 @@ import { TicketPriorityDropdown } from "@/components/ticket-priority-dropdown";
 import { TicketStatusDropdown } from "@/components/ticket-status-dropdown";
 import { Button } from "@/components/ui/button";
 import {
+  canAssignTickets,
+  canEscalateTicketToAdmin,
+  canManageTicketLifecycle,
+  canViewInternalNotes,
+  canViewTicket,
   categories,
   getTicketLastActivity,
   loadCurrentUser,
@@ -157,15 +162,29 @@ export default function TicketDetailsPage() {
   }, []);
 
   const ticketId = params.ticketId;
-  const ticket = useMemo(
+  const matchedTicket = useMemo(
     () => tickets.find((item) => item.id === ticketId) ?? null,
     [ticketId, tickets]
   );
+  const ticket = useMemo(() => {
+    if (!matchedTicket || !currentUser) return null;
+    return canViewTicket(currentUser, matchedTicket) ? matchedTicket : null;
+  }, [currentUser, matchedTicket]);
+  const isUnauthorizedForTicket = Boolean(matchedTicket && !ticket);
+  const canManageLifecycle = canManageTicketLifecycle(currentUser);
+  const canAssignTicketsForCurrentUser = canAssignTickets(currentUser);
+  const canUseInternalNotes = canViewInternalNotes(currentUser);
+  const canEscalateToAdmin = ticket
+    ? canEscalateTicketToAdmin(currentUser, ticket)
+    : false;
 
   const visibleReplies = useMemo(() => {
     if (!ticket) return [];
-    return ticket.replies;
-  }, [ticket]);
+    return ticket.replies.filter((reply) => {
+      if (reply.visibility === "Public") return true;
+      return canUseInternalNotes;
+    });
+  }, [canUseInternalNotes, ticket]);
 
   const interactionTimeline = useMemo(
     () => (ticket ? buildInteractionTimeline(ticket) : []),
@@ -184,6 +203,7 @@ export default function TicketDetailsPage() {
   const addReply = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!ticket || !replyMessage.trim()) return;
+    if (replyVisibility === "Internal" && !canUseInternalNotes) return;
     const nextReply: Reply = {
       id: `r-${Date.now()}`,
       parentId: replyParentId ?? undefined,
@@ -201,6 +221,38 @@ export default function TicketDetailsPage() {
     setReplyMessage("");
     setReplyVisibility("Public");
     setReplyParentId(null);
+  };
+
+  const escalateToAdmin = () => {
+    if (!ticket || !canEscalateToAdmin) return;
+    const escalatedAt = new Date().toLocaleString();
+    const escalationReason =
+      "Escalated by Sub-Franchisor for admin-level support and oversight.";
+    const escalationReply: Reply = {
+      id: `r-${Date.now()}-escalation`,
+      visibility: "Internal",
+      author: currentUser ?? "Sub-Franchisor",
+      message: `Escalated to Admin at ${escalatedAt}. ${escalationReason}`,
+      createdAt: escalatedAt,
+    };
+    const nextStatus: TicketStatus =
+      ticket.status === "Resolved" || ticket.status === "Closed"
+        ? ticket.status
+        : "Pending";
+    const nextTickets = tickets.map((item) =>
+      item.id === ticket.id
+        ? {
+            ...item,
+            escalated: true,
+            escalatedToAdminAt: escalatedAt,
+            escalationReason,
+            status: nextStatus,
+            replies: [...item.replies, escalationReply],
+          }
+        : item
+    );
+    setTickets(nextTickets);
+    saveTickets(nextTickets);
   };
 
   const renderReplies = (parentId: string | null, depth = 0): React.ReactNode => {
@@ -253,7 +305,7 @@ export default function TicketDetailsPage() {
     <>
       <section className="p-4 lg:p-6">
         <div className="mx-auto w-full max-w-[1400px] space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <Link
               href="/tickets"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-primary hover:underline"
@@ -261,17 +313,30 @@ export default function TicketDetailsPage() {
               <ArrowLeft className="size-4" />
               Back to tickets
             </Link>
-            {ticket ? (
-              <TicketStatusDropdown
-                value={ticket.status}
-                onChange={(status) => updateTicket({ status })}
-              />
-            ) : null}
+            <div className="flex items-center gap-2">
+              {canEscalateToAdmin ? (
+                <Button type="button" variant="outline" onClick={escalateToAdmin}>
+                  Escalate to Admin
+                </Button>
+              ) : null}
+              {ticket && canManageLifecycle ? (
+                <TicketStatusDropdown
+                  value={ticket.status}
+                  onChange={(status) => updateTicket({ status })}
+                />
+              ) : null}
+            </div>
           </div>
 
-          {!ticket ? (
+          {!matchedTicket ? (
             <div className="border-b border-slate-200 pb-6">
               <p className="text-sm text-slate-600">Ticket not found.</p>
+            </div>
+          ) : isUnauthorizedForTicket ? (
+            <div className="border-b border-slate-200 pb-6">
+              <p className="text-sm text-slate-600">
+                You do not have permission to view this ticket.
+              </p>
             </div>
           ) : (
             <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -281,6 +346,11 @@ export default function TicketDetailsPage() {
                 <h2 className="mt-1 text-xl font-semibold text-slate-900">{ticket.subject}</h2>
                 <p className="mt-2 text-sm text-slate-600">{ticket.description}</p>
                 <p className="mt-2 text-xs text-slate-500">Created by {ticket.createdBy}</p>
+                {ticket.escalated ? (
+                  <p className="mt-2 inline-flex border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                    Escalated to Admin{ticket.escalatedToAdminAt ? ` on ${ticket.escalatedToAdminAt}` : ""}
+                  </p>
+                ) : null}
               </section>
 
               <section className="pb-5">
@@ -361,17 +431,19 @@ export default function TicketDetailsPage() {
                       >
                         Public Reply
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setReplyVisibility("Internal")}
-                        className={`pb-2 text-sm font-semibold leading-none transition-colors ${
-                          replyVisibility === "Internal"
-                            ? "border-b-4 border-b-primary text-primary"
-                            : "text-slate-400 hover:text-slate-600"
-                        }`}
-                      >
-                        Internal Note
-                      </button>
+                      {canUseInternalNotes ? (
+                        <button
+                          type="button"
+                          onClick={() => setReplyVisibility("Internal")}
+                          className={`pb-2 text-sm font-semibold leading-none transition-colors ${
+                            replyVisibility === "Internal"
+                              ? "border-b-4 border-b-primary text-primary"
+                              : "text-slate-400 hover:text-slate-600"
+                          }`}
+                        >
+                          Internal Note
+                        </button>
+                      ) : null}
                     </div>
                     <div className="mt-4 border border-slate-200 bg-slate-100 p-4">
                       <textarea
@@ -418,6 +490,10 @@ export default function TicketDetailsPage() {
                           value: getTicketLastActivity(ticket),
                         },
                         { label: "Assigned to", value: ticket.assignedTo },
+                        { label: "Owner User ID", value: ticket.ownerUserId },
+                        { label: "Owner Org ID", value: ticket.ownerOrgId },
+                        { label: "Org ID", value: ticket.organizationId },
+                        { label: "Parent Org ID", value: ticket.parentOrganizationId ?? "—" },
                         { label: "Priority", value: ticket.priority },
                         { label: "Company Name", value: "Oz Designs" },
                         { label: "Issue Type", value: ticket.category },
@@ -428,42 +504,52 @@ export default function TicketDetailsPage() {
                         >
                           <p className="font-semibold text-slate-600">{row.label}</p>
                           {row.label === "Assigned to" ? (
-                            <SidebarSelect
-                              ariaLabel="Assigned to"
-                              value={ticket.assignedTo}
-                              onChange={(v) =>
-                                updateTicket({
-                                  assignedTo: v as Role,
-                                })
-                              }
-                              options={roles.map((role) => ({
-                                value: role,
-                                label: role,
-                              }))}
-                            />
+                            canAssignTicketsForCurrentUser ? (
+                              <SidebarSelect
+                                ariaLabel="Assigned to"
+                                value={ticket.assignedTo}
+                                onChange={(v) =>
+                                  updateTicket({
+                                    assignedTo: v as Role,
+                                  })
+                                }
+                                options={roles.map((role) => ({
+                                  value: role,
+                                  label: role,
+                                }))}
+                              />
+                            ) : (
+                              <p className="break-words text-slate-600">{row.value}</p>
+                            )
                           ) : row.label === "Priority" ? (
-                            <TicketPriorityDropdown
-                              fullWidth
-                              compact
-                              value={ticket.priority}
-                              onChange={(priority) =>
-                                updateTicket({ priority })
-                              }
-                            />
+                            canManageLifecycle ? (
+                              <TicketPriorityDropdown
+                                fullWidth
+                                compact
+                                value={ticket.priority}
+                                onChange={(priority) => updateTicket({ priority })}
+                              />
+                            ) : (
+                              <p className="break-words text-slate-600">{row.value}</p>
+                            )
                           ) : row.label === "Issue Type" ? (
-                            <SidebarSelect
-                              ariaLabel="Issue type"
-                              value={ticket.category}
-                              onChange={(v) =>
-                                updateTicket({
-                                  category: v as TicketCategory,
-                                })
-                              }
-                              options={categories.map((c) => ({
-                                value: c,
-                                label: c,
-                              }))}
-                            />
+                            canManageLifecycle ? (
+                              <SidebarSelect
+                                ariaLabel="Issue type"
+                                value={ticket.category}
+                                onChange={(v) =>
+                                  updateTicket({
+                                    category: v as TicketCategory,
+                                  })
+                                }
+                                options={categories.map((c) => ({
+                                  value: c,
+                                  label: c,
+                                }))}
+                              />
+                            ) : (
+                              <p className="break-words text-slate-600">{row.value}</p>
+                            )
                           ) : (
                             <p className="break-words text-slate-600">{row.value}</p>
                           )}

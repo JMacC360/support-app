@@ -1,9 +1,17 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { loadCurrentUser, saveCurrentUser } from "@/lib/tickets";
+import {
+  canAccessWorkspacePath,
+  getAllDemoAccounts,
+  isValidDemoCredentials,
+  loadCurrentUser,
+  normalizeUserEmail,
+  saveCurrentUser,
+} from "@/lib/tickets";
 
 /** Only allow in-app paths under known app routes (open redirect safe). */
 function safeRedirectPath(raw: string | null): string {
@@ -23,6 +31,7 @@ export function LoginForm() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
@@ -32,16 +41,35 @@ export function LoginForm() {
 
   useEffect(() => {
     if (!isHydrated) return;
-    if (loadCurrentUser()) {
-      router.replace(safeRedirectPath(searchParams.get("redirect")));
+    const existingUser = loadCurrentUser();
+    if (existingUser) {
+      const requestedPath = safeRedirectPath(searchParams.get("redirect"));
+      const destination = canAccessWorkspacePath(existingUser, requestedPath)
+        ? requestedPath
+        : "/tickets";
+      router.replace(destination);
     }
   }, [isHydrated, router, searchParams]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!email.trim() || !password.trim()) return;
-    saveCurrentUser(email.trim().toLowerCase());
-    router.replace(safeRedirectPath(searchParams.get("redirect")));
+    const normalizedEmail = normalizeUserEmail(email);
+    const enteredPassword = password.trim();
+    if (!normalizedEmail || !enteredPassword) return;
+
+    if (!isValidDemoCredentials(normalizedEmail, enteredPassword)) {
+      setErrorMessage("Invalid credentials. Use one of the seeded demo accounts.");
+      return;
+    }
+
+    setErrorMessage(null);
+    saveCurrentUser(normalizedEmail);
+
+    const requestedPath = safeRedirectPath(searchParams.get("redirect"));
+    const destination = canAccessWorkspacePath(normalizedEmail, requestedPath)
+      ? requestedPath
+      : "/tickets";
+    router.replace(destination);
   };
 
   if (!isHydrated) {
@@ -54,13 +82,27 @@ export function LoginForm() {
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-      <div className="w-full max-w-md rounded-none border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-          eSariSari Support Desk
+      <div className="w-full max-w-md rounded-none border border-slate-200 bg-white px-8 pb-8 pt-6 shadow-sm">
+        <Image
+          src="/esarisari-support-desk-logo-standard.png"
+          alt="eSariSari"
+          width={180}
+          height={150}
+          className="mx-auto block w-full max-w-[280px] leading-none"
+          priority
+        />
+        <h1 className="mt-3 text-center text-2xl font-semibold tracking-tight text-slate-900">
+          Sign in
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Sign in to continue.
-        </p>
+        <div className="mt-2 rounded-none border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+          <p className="font-medium text-slate-700">Seeded demo accounts</p>
+          <p className="mt-1">Password for all accounts: password123</p>
+          <p className="mt-1">
+            {getAllDemoAccounts()
+              .map((account) => account.email)
+              .join(", ")}
+          </p>
+        </div>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700" htmlFor="login-email">
@@ -85,11 +127,16 @@ export function LoginForm() {
               type="password"
               autoComplete="current-password"
               className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
-              placeholder="Enter any value for now"
+              placeholder="Enter your password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </div>
+          {errorMessage ? (
+            <p className="text-sm text-rose-700" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
           <Button type="submit" size="lg" className="w-full px-4 py-3 text-base">
             Sign in
           </Button>

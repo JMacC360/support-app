@@ -1,14 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ComponentProps, useState } from "react";
+import { type ComponentProps, useEffect, useMemo, useState } from "react";
+import { Shield } from "lucide-react";
 import { PermissionSwitch } from "@/components/permission-switch";
 import { Button } from "@/components/ui/button";
-import {
-  defaultNewRolePermissions,
-  fullPermissionMatrixGroups,
-  type PermissionId,
-} from "@/lib/roles-permissions-matrix";
+import { createRole, fetchPermissions, type ApiPermission } from "@/lib/rbac";
 
 function UnderlineField({
   id,
@@ -53,24 +50,127 @@ export default function NewRolePage() {
   const router = useRouter();
   const [roleName, setRoleName] = useState("");
   const [roleDescription, setRoleDescription] = useState("");
-  const [permissions, setPermissions] = useState<Record<PermissionId, boolean>>(() => ({
-    ...defaultNewRolePermissions,
-  }));
+  const [availablePermissions, setAvailablePermissions] = useState<ApiPermission[]>([]);
+  const [selectedPermissionNames, setSelectedPermissionNames] = useState<Set<string>>(new Set());
+  const [isLoadingPermissions, setIsLoadingPermissions] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const displayRoleLabel = roleName.trim() || "New role";
 
-  const togglePermission = (id: PermissionId) => {
-    setPermissions((prev) => ({ ...prev, [id]: !prev[id] }));
+  useEffect(() => {
+    let active = true;
+
+    const loadPermissions = async () => {
+      setIsLoadingPermissions(true);
+      setErrorMessage(null);
+
+      try {
+        const permissions = await fetchPermissions();
+        if (!active) return;
+        setAvailablePermissions(permissions);
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(
+          error instanceof Error ? error.message : "Unable to load permissions."
+        );
+      } finally {
+        if (!active) return;
+        setIsLoadingPermissions(false);
+      }
+    };
+
+    void loadPermissions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const togglePermission = (permissionName: string) => {
+    setSelectedPermissionNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(permissionName)) {
+        next.delete(permissionName);
+      } else {
+        next.add(permissionName);
+      }
+      return next;
+    });
   };
 
   const handleCancel = () => router.push("/roles");
 
-  const handleSave = () => {
-    router.push("/roles");
+  const groupedPermissions = useMemo(() => {
+    const grouped = new Map<string, ApiPermission[]>();
+
+    for (const permission of availablePermissions) {
+      const [scope = "general"] = permission.name.split(".");
+      if (!grouped.has(scope)) grouped.set(scope, []);
+      grouped.get(scope)?.push(permission);
+    }
+
+    return Array.from(grouped.entries()).map(([scope, permissions]) => ({
+      scope,
+      permissions: [...permissions].sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+  }, [availablePermissions]);
+
+  const handleSave = async () => {
+    const normalizedName = roleName.trim();
+    if (!normalizedName) {
+      setErrorMessage("Role name is required.");
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    try {
+      await createRole({
+        name: normalizedName,
+        guard_name: "api",
+        permissions: Array.from(selectedPermissionNames),
+      });
+      router.push("/roles");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to save role.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
+  const canSave = roleName.trim().length > 0 && !isSaving;
+
+  const saveButtonLabel = isSaving ? "Saving..." : "Save role";
+
+  const showEmptyPermissions = !isLoadingPermissions && groupedPermissions.length === 0;
   const cancelButtonClass =
     "rounded-none px-0 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-transparent hover:text-slate-900";
+
+  if (isLoadingPermissions) {
+    return (
+      <section className="p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1400px] border border-slate-200 bg-white p-6">
+          <p className="text-sm text-slate-500">Loading permissions...</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (errorMessage && availablePermissions.length === 0) {
+    return (
+      <section className="p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1400px] border border-rose-200 bg-rose-50 p-6">
+          <p className="text-sm text-rose-700">{errorMessage}</p>
+          <div className="mt-4">
+            <Button type="button" variant="outline" onClick={() => router.push("/roles")}>
+              Back to roles
+            </Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="p-4 lg:p-6">
@@ -79,7 +179,7 @@ export default function NewRolePage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Create New Role</h1>
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
-              Define specialized access levels and permission matrices for your support team. 
+              Define role identity and assign API permissions.
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-4">
@@ -89,12 +189,19 @@ export default function NewRolePage() {
             <Button
               type="button"
               className="rounded-none px-5 text-xs font-semibold uppercase tracking-wide shadow-md"
-              onClick={handleSave}
+              onClick={() => void handleSave()}
+              disabled={!canSave}
             >
-              Save role
+              {saveButtonLabel}
             </Button>
           </div>
         </header>
+
+        {errorMessage ? (
+          <div className="mb-4 border border-rose-200 bg-rose-50 px-4 py-3">
+            <p className="text-sm text-rose-700">{errorMessage}</p>
+          </div>
+        ) : null}
 
         <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
           <aside className="border border-slate-200 border-l-[4px] border-l-primary bg-white p-5">
@@ -103,7 +210,7 @@ export default function NewRolePage() {
               <UnderlineField
                 id="new-role-name"
                 label="Role name"
-                placeholder="e.g. Senior Tier 2 Technician"
+                placeholder="e.g. supervisor"
                 value={roleName}
                 onChange={(e) => setRoleName(e.target.value)}
                 autoComplete="off"
@@ -111,7 +218,7 @@ export default function NewRolePage() {
               <UnderlineTextarea
                 id="new-role-description"
                 label="Description"
-                placeholder="Briefly describe the responsibilities associated with this role..."
+                placeholder="Optional notes for internal use."
                 value={roleDescription}
                 onChange={(e) => setRoleDescription(e.target.value)}
               />
@@ -133,49 +240,43 @@ export default function NewRolePage() {
               </div>
             </header>
 
-            <div className="mt-4 space-y-4">
-              {fullPermissionMatrixGroups.map((group) => {
-                const Icon = group.icon;
-                return (
-                  <section key={group.id} className="border-b border-slate-200 pb-4 last:border-b-0">
+            {showEmptyPermissions ? (
+              <p className="mt-4 text-sm text-slate-500">
+                No permissions found in backend yet.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-4">
+                {groupedPermissions.map((group) => (
+                  <section key={group.scope} className="border-b border-slate-200 pb-4 last:border-b-0">
                     <div className="mb-3 flex items-center gap-2">
-                      <Icon className="size-4 text-secondary" />
+                      <Shield className="size-4 text-secondary" />
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
-                        {group.title}
+                        {group.scope}
                       </h3>
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      {group.rows.map((item) => (
+                      {group.permissions.map((permission) => (
                         <div
-                          key={item.id}
-                          className={`flex items-start justify-between gap-4 border px-3 py-3 ${
-                            item.disabled
-                              ? "border-slate-200 bg-slate-50"
-                              : "border-transparent bg-white"
-                          }`}
+                          key={permission.id}
+                          className="flex items-start justify-between gap-4 border-transparent bg-white px-3 py-3"
                         >
                           <div className="min-w-0">
-                            <p
-                              className={`text-lg font-semibold ${
-                                item.disabled ? "text-slate-500" : "text-slate-900"
-                              }`}
-                            >
-                              {item.title}
+                            <p className="text-lg font-semibold text-slate-900">{permission.name}</p>
+                            <p className="mt-0.5 text-sm text-slate-600">
+                              Guard: {permission.guard_name}
                             </p>
-                            <p className="mt-0.5 text-sm text-slate-600">{item.description}</p>
                           </div>
                           <PermissionSwitch
-                            checked={permissions[item.id] ?? false}
-                            disabled={item.disabled}
-                            onChange={() => togglePermission(item.id)}
+                            checked={selectedPermissionNames.has(permission.name)}
+                            onChange={() => togglePermission(permission.name)}
                           />
                         </div>
                       ))}
                     </div>
                   </section>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
         </div>
       </div>

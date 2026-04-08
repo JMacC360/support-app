@@ -4,13 +4,10 @@ import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { getAccessToken, loginWithPassword } from "@/lib/auth";
 import {
   canAccessWorkspacePath,
-  getAllDemoAccounts,
-  isValidDemoCredentials,
   loadCurrentUser,
-  normalizeUserEmail,
-  saveCurrentUser,
 } from "@/lib/tickets";
 
 /** Only allow in-app paths under known app routes (open redirect safe). */
@@ -33,6 +30,7 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const id = window.requestAnimationFrame(() => setIsHydrated(true));
@@ -42,7 +40,7 @@ export function LoginForm() {
   useEffect(() => {
     if (!isHydrated) return;
     const existingUser = loadCurrentUser();
-    if (existingUser) {
+    if (existingUser && getAccessToken()) {
       const requestedPath = safeRedirectPath(searchParams.get("redirect"));
       const destination = canAccessWorkspacePath(existingUser, requestedPath)
         ? requestedPath
@@ -51,25 +49,29 @@ export function LoginForm() {
     }
   }, [isHydrated, router, searchParams]);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const normalizedEmail = normalizeUserEmail(email);
+    const enteredEmail = email.trim();
     const enteredPassword = password.trim();
-    if (!normalizedEmail || !enteredPassword) return;
+    if (!enteredEmail || !enteredPassword) return;
 
-    if (!isValidDemoCredentials(normalizedEmail, enteredPassword)) {
-      setErrorMessage("Invalid credentials. Use one of the seeded demo accounts.");
-      return;
-    }
-
+    setIsSubmitting(true);
     setErrorMessage(null);
-    saveCurrentUser(normalizedEmail);
 
-    const requestedPath = safeRedirectPath(searchParams.get("redirect"));
-    const destination = canAccessWorkspacePath(normalizedEmail, requestedPath)
-      ? requestedPath
-      : "/tickets";
-    router.replace(destination);
+    try {
+      const session = await loginWithPassword(enteredEmail, enteredPassword);
+      const signedInEmail = session.user.email;
+
+      const requestedPath = safeRedirectPath(searchParams.get("redirect"));
+      const destination = canAccessWorkspacePath(signedInEmail, requestedPath)
+        ? requestedPath
+        : "/tickets";
+      router.replace(destination);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to sign in.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isHydrated) {
@@ -95,12 +97,9 @@ export function LoginForm() {
           Sign in
         </h1>
         <div className="mt-2 rounded-none border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
-          <p className="font-medium text-slate-700">Seeded demo accounts</p>
-          <p className="mt-1">Password for all accounts: password123</p>
+          <p className="font-medium text-slate-700">Connected to support API</p>
           <p className="mt-1">
-            {getAllDemoAccounts()
-              .map((account) => account.email)
-              .join(", ")}
+            Sign in with a backend user account from your Laravel auth database.
           </p>
         </div>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
@@ -137,8 +136,13 @@ export function LoginForm() {
               {errorMessage}
             </p>
           ) : null}
-          <Button type="submit" size="lg" className="w-full px-4 py-3 text-base">
-            Sign in
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full px-4 py-3 text-base"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Signing in..." : "Sign in"}
           </Button>
         </form>
       </div>

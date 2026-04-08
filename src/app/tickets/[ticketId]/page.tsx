@@ -9,6 +9,14 @@ import { TicketPriorityDropdown } from "@/components/ticket-priority-dropdown";
 import { TicketStatusDropdown } from "@/components/ticket-status-dropdown";
 import { Button } from "@/components/ui/button";
 import {
+  createTicketReply,
+  fetchTicketDependencies,
+  fetchTicketDetail,
+  type TicketAssigneeOption,
+  type TicketCategoryOption,
+  updateTicketFields,
+} from "@/lib/tickets-api";
+import {
   canAssignTickets,
   canEscalateTicketToAdmin,
   canManageTicketLifecycle,
@@ -17,11 +25,7 @@ import {
   categories,
   getTicketLastActivity,
   loadCurrentUser,
-  loadTickets,
-  roles,
-  saveTickets,
   type Reply,
-  type Role,
   type Ticket,
   type TicketCategory,
   type TicketStatus,
@@ -145,7 +149,10 @@ export default function TicketDetailsPage() {
   const params = useParams<{ ticketId: string }>();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<TicketCategoryOption[]>([]);
+  const [assigneeOptions, setAssigneeOptions] = useState<TicketAssigneeOption[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState("");
   const [replyVisibility, setReplyVisibility] = useState<"Public" | "Internal">(
     "Public"
@@ -153,13 +160,37 @@ export default function TicketDetailsPage() {
   const [replyParentId, setReplyParentId] = useState<string | null>(null);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setCurrentUser(loadCurrentUser());
-      setTickets(loadTickets());
-      setIsHydrated(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
+    let active = true;
+
+    const load = async () => {
+      const user = loadCurrentUser();
+      setCurrentUser(user);
+      setErrorMessage(null);
+
+      try {
+        const [ticket, dependencies] = await Promise.all([
+          fetchTicketDetail(params.ticketId),
+          fetchTicketDependencies(),
+        ]);
+
+        if (!active) return;
+        setTickets([ticket]);
+        setCategoryOptions(dependencies.categories);
+        setAssigneeOptions(dependencies.assignees);
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load ticket.");
+      } finally {
+        if (!active) return;
+        setIsHydrated(true);
+      }
+    };
+
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [params.ticketId]);
 
   const ticketId = params.ticketId;
   const matchedTicket = useMemo(
@@ -191,36 +222,54 @@ export default function TicketDetailsPage() {
     [ticket]
   );
 
-  const updateTicket = (updates: Partial<Ticket>) => {
+  const updateTicket = async (updates: Partial<Ticket>) => {
     if (!ticket) return;
-    const nextTickets = tickets.map((item) =>
-      item.id === ticket.id ? { ...item, ...updates } : item
-    );
-    setTickets(nextTickets);
-    saveTickets(nextTickets);
+
+    const payload: {
+      status?: TicketStatus;
+      priority?: string;
+      categoryId?: number;
+      assignedTo?: number | null;
+    } = {};
+
+    if (updates.status) payload.status = updates.status;
+    if (updates.priority) payload.priority = updates.priority;
+    if (updates.category) {
+      const category = categoryOptions.find((entry) => entry.name === updates.category);
+      if (category) payload.categoryId = category.id;
+    }
+    if (updates.assignedTo !== undefined) {
+      const assignee = assigneeOptions.find((entry) => entry.name === updates.assignedTo);
+      payload.assignedTo = assignee?.id ?? null;
+    }
+
+    try {
+      await updateTicketFields(ticket.id, payload);
+      const refreshedTicket = await fetchTicketDetail(ticket.id);
+      setTickets([refreshedTicket]);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update ticket.");
+    }
   };
 
-  const addReply = (event: FormEvent<HTMLFormElement>) => {
+  const addReply = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!ticket || !replyMessage.trim()) return;
     if (replyVisibility === "Internal" && !canUseInternalNotes) return;
-    const nextReply: Reply = {
-      id: `r-${Date.now()}`,
-      parentId: replyParentId ?? undefined,
-      visibility: replyVisibility,
-      author: currentUser ?? "Support Agent",
-      message: replyMessage.trim(),
-      createdAt: new Date().toLocaleString(),
-    };
-
-    const nextTickets = tickets.map((item) =>
-      item.id === ticket.id ? { ...item, replies: [...item.replies, nextReply] } : item
-    );
-    setTickets(nextTickets);
-    saveTickets(nextTickets);
-    setReplyMessage("");
-    setReplyVisibility("Public");
-    setReplyParentId(null);
+    try {
+      await createTicketReply({
+        ticketId: ticket.id,
+        message: replyMessage.trim(),
+        visibility: replyVisibility,
+      });
+      const refreshedTicket = await fetchTicketDetail(ticket.id);
+      setTickets([refreshedTicket]);
+      setReplyMessage("");
+      setReplyVisibility("Public");
+      setReplyParentId(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to add reply.");
+    }
   };
 
   const escalateToAdmin = () => {
@@ -252,7 +301,6 @@ export default function TicketDetailsPage() {
         : item
     );
     setTickets(nextTickets);
-    saveTickets(nextTickets);
   };
 
   const renderReplies = (parentId: string | null, depth = 0): React.ReactNode => {
@@ -305,6 +353,11 @@ export default function TicketDetailsPage() {
     <>
       <section className="p-4 lg:p-6">
         <div className="mx-auto w-full max-w-[1400px] space-y-4">
+          {errorMessage ? (
+            <div className="border border-rose-200 bg-rose-50 px-4 py-3">
+              <p className="text-sm text-rose-700">{errorMessage}</p>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-2">
             <Link
               href="/tickets"
@@ -510,12 +563,12 @@ export default function TicketDetailsPage() {
                                 value={ticket.assignedTo}
                                 onChange={(v) =>
                                   updateTicket({
-                                    assignedTo: v as Role,
+                                    assignedTo: v,
                                   })
                                 }
-                                options={roles.map((role) => ({
-                                  value: role,
-                                  label: role,
+                                options={assigneeOptions.map((assignee) => ({
+                                  value: assignee.name,
+                                  label: assignee.name,
                                 }))}
                               />
                             ) : (
@@ -542,7 +595,10 @@ export default function TicketDetailsPage() {
                                     category: v as TicketCategory,
                                   })
                                 }
-                                options={categories.map((c) => ({
+                                options={(categoryOptions.length
+                                  ? categoryOptions.map((entry) => entry.name)
+                                  : categories
+                                ).map((c) => ({
                                   value: c,
                                   label: c,
                                 }))}

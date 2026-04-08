@@ -1,21 +1,22 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileUp, Tag } from "lucide-react";
+import { FileUp, Plus, Tag, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  createCategory,
+  createTicket,
+  fetchTicketDependencies,
+  type TicketAssigneeOption,
+  type TicketCategoryOption,
+} from "@/lib/tickets-api";
 import {
   canCreateTickets,
   categories,
-  getCurrentUserContext,
   loadCurrentUser,
-  loadTickets,
-  newTicketId,
   priorities,
-  roles,
-  saveTickets,
   type Role,
-  type Ticket,
   type TicketCategory,
   type TicketPriority,
 } from "@/lib/tickets";
@@ -23,56 +24,204 @@ import {
 export default function CreateTicketPage() {
   const router = useRouter();
   const currentUser = loadCurrentUser();
-  const currentUserContext = getCurrentUserContext(currentUser);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<TicketCategory>("Technical");
   const [priority, setPriority] = useState<TicketPriority>("Medium");
-  const [attachmentInput] = useState("");
-  const [manualAssignee, setManualAssignee] = useState<Role>("L1 Support");
+  const [manualAssignee, setManualAssignee] = useState<Role>("");
+  const [categoryOptions, setCategoryOptions] = useState<TicketCategoryOption[]>([]);
+  const [assigneeOptions, setAssigneeOptions] = useState<TicketAssigneeOption[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isCategoryPanelOpen, setIsCategoryPanelOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryDescription, setNewCategoryDescription] = useState("");
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  const [categoryPanelError, setCategoryPanelError] = useState<string | null>(null);
+  const hasCategoryOptions = categoryOptions.length > 0;
+
+  useEffect(() => {
+    let active = true;
+
+    const loadDependencies = async () => {
+      try {
+        const { categories: loadedCategories, assignees } = await fetchTicketDependencies();
+        if (!active) return;
+
+        setCategoryOptions(loadedCategories);
+        setAssigneeOptions(assignees);
+
+        if (loadedCategories[0]?.name) {
+          setCategory(loadedCategories[0].name);
+        }
+
+        if (assignees[0]?.id) {
+          setManualAssignee(String(assignees[0].id));
+        }
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load dependencies.");
+      }
+    };
+
+    void loadDependencies();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const resolvedAssignee = useMemo(() => manualAssignee, [manualAssignee]);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleCreateCategory = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmedName = newCategoryName.trim();
+    if (!trimmedName) {
+      setCategoryPanelError("Category name is required.");
+      return;
+    }
+
+    setIsCreatingCategory(true);
+    setCategoryPanelError(null);
+
+    try {
+      const createdCategory = await createCategory({
+        name: trimmedName,
+        description: newCategoryDescription.trim(),
+      });
+      setCategoryOptions((prev) => [...prev, createdCategory].sort((a, b) => a.name.localeCompare(b.name)));
+      setCategory(createdCategory.name);
+      setNewCategoryName("");
+      setNewCategoryDescription("");
+      setIsCategoryPanelOpen(false);
+      setErrorMessage(null);
+    } catch (error) {
+      setCategoryPanelError(
+        error instanceof Error ? error.message : "Unable to create category."
+      );
+    } finally {
+      setIsCreatingCategory(false);
+    }
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!currentUser) return;
     if (!canCreateTickets(currentUser)) return;
-    if (!currentUserContext) return;
     if (!subject.trim() || !description.trim()) return;
+    if (!categoryOptions.length) {
+      setErrorMessage("No ticket categories available yet. Please create categories first.");
+      return;
+    }
 
-    const existingTickets = loadTickets();
-    const nextNumber = existingTickets.length + 1;
-    const attachments = attachmentInput
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const selectedCategory = categoryOptions.find((entry) => entry.name === category);
+    if (!selectedCategory) return;
 
-    const createdTicket: Ticket = {
-      id: newTicketId(nextNumber),
-      subject: subject.trim(),
-      description: description.trim(),
-      createdAt: new Date().toLocaleString(),
-      category,
-      priority,
-      status: "Open",
-      attachments,
-      createdBy: currentUser,
-      ownerUserId: currentUserContext.userId,
-      ownerOrgId: currentUserContext.organizationId,
-      organizationId: currentUserContext.organizationId,
-      parentOrganizationId: currentUserContext.parentOrganizationId,
-      assignedTo: resolvedAssignee,
-      escalated: false,
-      replies: [],
-    };
+    setIsSubmitting(true);
+    setErrorMessage(null);
 
-    const nextTickets = [createdTicket, ...existingTickets];
-    saveTickets(nextTickets);
-    router.push(`/tickets/${createdTicket.id}`);
+    try {
+      const createdTicket = await createTicket({
+        subject: subject.trim(),
+        description: description.trim(),
+        categoryId: selectedCategory.id,
+        priority,
+        assignedTo: resolvedAssignee ? Number(resolvedAssignee) : null,
+      });
+
+      router.push(`/tickets/${createdTicket.id}`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to create ticket.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <section className="p-4 lg:p-6">
+      {isCategoryPanelOpen ? (
+        <div className="fixed inset-0 z-50 flex">
+          <div
+            className="absolute inset-0 bg-slate-900/35"
+            onClick={() => setIsCategoryPanelOpen(false)}
+            aria-hidden
+          />
+          <aside className="relative z-10 ml-auto h-full w-full max-w-md border-l border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+              <div>
+                <h3 className="text-xl font-semibold tracking-tight text-slate-900">
+                  Create Category
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Add a new ticket category and use it immediately.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex size-9 items-center justify-center border border-slate-300 text-slate-700 hover:bg-slate-100"
+                onClick={() => setIsCategoryPanelOpen(false)}
+                aria-label="Close category panel"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <form className="mt-5 space-y-4" onSubmit={handleCreateCategory}>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="new-category-name"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-600"
+                >
+                  Category Name
+                </label>
+                <input
+                  id="new-category-name"
+                  className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="e.g. Deployment"
+                  value={newCategoryName}
+                  onChange={(event) => setNewCategoryName(event.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="new-category-description"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-600"
+                >
+                  Description
+                </label>
+                <textarea
+                  id="new-category-description"
+                  className="min-h-24 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="Optional description..."
+                  value={newCategoryDescription}
+                  onChange={(event) => setNewCategoryDescription(event.target.value)}
+                />
+              </div>
+
+              {categoryPanelError ? (
+                <div className="border border-rose-200 bg-rose-50 px-3 py-2">
+                  <p className="text-sm text-rose-700">{categoryPanelError}</p>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsCategoryPanelOpen(false)}
+                  disabled={isCreatingCategory}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isCreatingCategory}>
+                  {isCreatingCategory ? "Creating..." : "Create Category"}
+                </Button>
+              </div>
+            </form>
+          </aside>
+        </div>
+      ) : null}
       <div className="mx-auto w-full max-w-[1400px] space-y-4">
         <header className="space-y-2">
           <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Create Ticket</h2>
@@ -80,6 +229,11 @@ export default function CreateTicketPage() {
             Submit a detailed request to our support authority.
           </p>
         </header>
+        {errorMessage ? (
+          <div className="border border-rose-200 bg-rose-50 px-4 py-3">
+            <p className="text-sm text-rose-700">{errorMessage}</p>
+          </div>
+        ) : null}
 
         <form className="grid gap-4 lg:grid-cols-[1fr_320px]" onSubmit={handleSubmit}>
           <section className="space-y-4">
@@ -148,24 +302,43 @@ export default function CreateTicketPage() {
             </h3>
             <div className="space-y-4">
               <div className="space-y-1">
-                <label
-                  htmlFor="category"
-                  className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
-                >
-                  Category
-                </label>
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="category"
+                    className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+                  >
+                    Category
+                  </label>
+                  <button
+                    type="button"
+                    className="inline-flex size-6 items-center justify-center border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    onClick={() => {
+                      setCategoryPanelError(null);
+                      setIsCategoryPanelOpen(true);
+                    }}
+                    aria-label="Create new category"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </div>
                 <select
                   id="category"
                   className="w-full border border-slate-300 bg-white px-3 py-2 text-base text-slate-900"
                   value={category}
                   onChange={(event) => setCategory(event.target.value as TicketCategory)}
+                  disabled={!hasCategoryOptions}
                 >
-                  {categories.map((value) => (
+                  {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((value) => (
                     <option key={value} value={value}>
                       {value}
                     </option>
                   ))}
                 </select>
+                {!hasCategoryOptions ? (
+                  <p className="mt-1 text-xs text-rose-700">
+                    No categories found. Add categories in backend first.
+                  </p>
+                ) : null}
               </div>
 
               <div className="space-y-1">
@@ -202,11 +375,16 @@ export default function CreateTicketPage() {
                   value={resolvedAssignee}
                   onChange={(event) => setManualAssignee(event.target.value as Role)}
                 >
-                  {roles.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
+                  {assigneeOptions.map((assignee) => (
+                    <option key={assignee.id} value={String(assignee.id)}>
+                      {assignee.name}
                     </option>
                   ))}
+                  {assigneeOptions.length === 0 ? (
+                    <option key="unassigned" value="">
+                      Unassigned
+                    </option>
+                  ) : null}
                 </select>
               </div>
 
@@ -218,8 +396,12 @@ export default function CreateTicketPage() {
               </div>
 
               <div className="grid gap-2 pt-2">
-                <Button type="submit" className="w-full">
-                  Submit Ticket
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isSubmitting || !hasCategoryOptions}
+                >
+                  {isSubmitting ? "Submitting..." : "Submit Ticket"}
                 </Button>
                 <Button
                   type="button"

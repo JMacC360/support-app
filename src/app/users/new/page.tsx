@@ -11,7 +11,8 @@ import {
   User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { addUser, userRoles, type UserRole } from "@/lib/users";
+import { fetchRoles } from "@/lib/rbac";
+import { createUser } from "@/lib/users";
 
 const steps = [
   { id: "personal-details", label: "Personal Details", icon: User },
@@ -40,38 +41,53 @@ export default function NewUserPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<UserRole>("Retailer");
+  const [role, setRole] = useState<string>("");
+  const [roleOptions, setRoleOptions] = useState<string[]>([]);
   const [organizationSearch, setOrganizationSearch] = useState("");
   const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
     viewFinancialReports: true,
     manageSupportTickets: true,
     globalSystemSettings: false,
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
   const username = email.trim().toLowerCase();
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setErrorMessage(null);
+
     if (
       !firstName.trim() ||
       !lastName.trim() ||
       !email.trim() ||
       !temporaryPassword.trim() ||
-      temporaryPassword !== confirmPassword
+      temporaryPassword !== confirmPassword ||
+      !role
     ) {
       return;
     }
-    addUser({
-      name: fullName,
-      email: username,
-      role,
-      status: "Active",
-    });
-    router.push("/users");
+
+    setIsSubmitting(true);
+    try {
+      await createUser({
+        name: fullName,
+        email: username,
+        password: temporaryPassword,
+        password_confirmation: confirmPassword,
+        roles: [role],
+        is_active: true,
+      });
+      router.push("/users");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to create user.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const togglePermission = (key: PermissionKey) => {
@@ -79,6 +95,25 @@ export default function NewUserPage() {
   };
 
   useEffect(() => {
+    let active = true;
+
+    const loadRoleOptions = async () => {
+      try {
+        const roles = await fetchRoles();
+        if (!active) return;
+        const roleNames = roles.map((item) => item.name);
+        setRoleOptions(roleNames);
+        if (roleNames.length > 0) {
+          setRole(roleNames[0]!);
+        }
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load roles.");
+      }
+    };
+
+    void loadRoleOptions();
+
     const pickFromHash = () => {
       const hash = window.location.hash.replace("#", "");
       if (steps.some((step) => step.id === hash)) {
@@ -87,7 +122,10 @@ export default function NewUserPage() {
     };
     pickFromHash();
     window.addEventListener("hashchange", pickFromHash);
-    return () => window.removeEventListener("hashchange", pickFromHash);
+    return () => {
+      active = false;
+      window.removeEventListener("hashchange", pickFromHash);
+    };
   }, []);
 
   return (
@@ -139,10 +177,17 @@ export default function NewUserPage() {
                   >
                     Discard
                   </Button>
-                  <Button type="submit">Save User</Button>
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting ? "Saving..." : "Save User"}
+                  </Button>
                 </div>
               </div>
             </header>
+            {errorMessage ? (
+              <div className="border border-rose-200 bg-rose-50 px-4 py-3">
+                <p className="text-sm text-rose-700">{errorMessage}</p>
+              </div>
+            ) : null}
 
             <section
               id="personal-details"
@@ -292,9 +337,9 @@ export default function NewUserPage() {
                     id="new-user-role"
                     className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm"
                     value={role}
-                    onChange={(e) => setRole(e.target.value as UserRole)}
+                    onChange={(e) => setRole(e.target.value)}
                   >
-                    {userRoles.map((r) => (
+                    {roleOptions.map((r) => (
                       <option key={r} value={r}>
                         {r}
                       </option>

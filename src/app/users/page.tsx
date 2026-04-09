@@ -317,21 +317,32 @@ export default function UsersPage() {
                                 {user.status}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="border-slate-300"
-                                onClick={() => void toggleStatus(user)}
-                                disabled={Boolean(isStatusUpdating[user.id])}
-                              >
-                                {isStatusUpdating[user.id]
-                                  ? "Updating..."
-                                  : user.status === "Active"
-                                    ? "Deactivate"
-                                    : "Activate"}
-                              </Button>
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-slate-300"
+                                  onClick={() => router.push(`/users/${user.id}`)}
+                                >
+                                  View / Edit
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-slate-300"
+                                  onClick={() => void toggleStatus(user)}
+                                  disabled={Boolean(isStatusUpdating[user.id])}
+                                >
+                                  {isStatusUpdating[user.id]
+                                    ? "Updating..."
+                                    : user.status === "Active"
+                                      ? "Deactivate"
+                                      : "Activate"}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

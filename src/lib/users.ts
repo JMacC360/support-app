@@ -105,6 +105,20 @@ export async function fetchUsers() {
   return payload.data.map(toUserRecord);
 }
 
+export async function fetchUserById(userId: number) {
+  const response = await fetch(`${getApiBaseUrl()}/users/${userId}`, {
+    method: "GET",
+    headers: getJsonHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to load user details."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
+}
+
 export async function createUser(input: {
   name: string;
   email: string;
@@ -138,6 +152,31 @@ export async function updateUserStatus(userId: number, isActive: boolean) {
 
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Unable to update user status."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
+}
+
+export async function updateUser(
+  userId: number,
+  input: {
+    name: string;
+    email: string;
+    password?: string;
+    password_confirmation?: string;
+    roles?: string[];
+    is_active?: boolean;
+  }
+) {
+  const response = await fetch(`${getApiBaseUrl()}/users/${userId}`, {
+    method: "PUT",
+    headers: getJsonHeaders(),
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to update user."));
   }
 
   const payload = (await response.json()) as ResourceResponse<ApiUser>;

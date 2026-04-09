@@ -26,6 +26,10 @@ type ApiTicket = {
   status: "Open" | "In Progress" | "Pending" | "Resolved" | "Closed";
   created_at: string;
   updated_at: string;
+  owner_org_id?: string | null;
+  organization_id?: string | null;
+  parent_organization_id?: string | null;
+  company_name?: string | null;
   creator?: ApiUser;
   assignee?: ApiUser | null;
 };
@@ -97,6 +101,7 @@ function mapApiThreadToReply(thread: ApiTicketThread): Reply {
     author: thread.user?.name ?? thread.user?.email ?? `User #${thread.user_id}`,
     message: hasInternalNote ? (thread.internal_notes as string) : thread.message,
     createdAt: new Date(thread.created_at).toLocaleString(),
+    attachments: thread.attachments ?? [],
   };
 }
 
@@ -105,8 +110,10 @@ function mapApiTicketToTicket(
   categoryById: Map<number, string>,
   replies: Reply[]
 ): Ticket {
-  const creatorLabel = ticket.creator?.email ?? ticket.creator?.name ?? `user-${ticket.created_by}`;
+  const creatorLabel = ticket.creator?.name ?? ticket.creator?.email ?? `user-${ticket.created_by}`;
   const assigneeLabel = ticket.assignee?.name ?? "Unassigned";
+  const ownerOrgId = ticket.owner_org_id ?? ticket.organization_id ?? "—";
+  const organizationId = ticket.organization_id ?? ticket.owner_org_id ?? "—";
 
   return {
     id: String(ticket.id),
@@ -119,9 +126,10 @@ function mapApiTicketToTicket(
     attachments: ticket.attachments ?? [],
     createdBy: creatorLabel,
     ownerUserId: String(ticket.created_by),
-    ownerOrgId: "ORG-HQ",
-    organizationId: "ORG-HQ",
-    parentOrganizationId: null,
+    ownerOrgId,
+    organizationId,
+    parentOrganizationId: ticket.parent_organization_id ?? null,
+    companyName: ticket.company_name ?? undefined,
     assignedTo: assigneeLabel,
     escalated: false,
     replies,
@@ -334,25 +342,95 @@ export async function createTicketReply(input: {
   ticketId: string;
   message: string;
   visibility: "Public" | "Internal";
+  attachments?: File[];
 }) {
-  const payload: Record<string, string> = {
-    message: input.message,
-  };
-
-  if (input.visibility === "Internal") {
-    payload.internal_notes = input.message;
-  }
+  const hasAttachments = Boolean(input.attachments?.length);
 
   const response = await fetch(`${getApiBaseUrl()}/tickets/${input.ticketId}/threads`, {
     method: "POST",
-    headers: {
-      ...getJsonHeaders(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+    headers: hasAttachments
+      ? getJsonHeaders()
+      : {
+          ...getJsonHeaders(),
+          "Content-Type": "application/json",
+        },
+    body: hasAttachments
+      ? (() => {
+          const formData = new FormData();
+          formData.append("message", input.message);
+          if (input.visibility === "Internal") {
+            formData.append("internal_notes", input.message);
+          }
+          (input.attachments ?? []).forEach((file) => {
+            formData.append("attachments[]", file);
+          });
+          return formData;
+        })()
+      : JSON.stringify({
+          message: input.message,
+          ...(input.visibility === "Internal" ? { internal_notes: input.message } : {}),
+        }),
   });
 
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Unable to add reply."));
+  }
+}
+
+export async function updateTicketReply(input: {
+  ticketId: string;
+  threadId: string;
+  message: string;
+  visibility: "Public" | "Internal";
+  attachments?: File[];
+}) {
+  const hasAttachments = Boolean(input.attachments?.length);
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/tickets/${input.ticketId}/threads/${input.threadId}`,
+    {
+      method: "PUT",
+      headers: hasAttachments
+        ? getJsonHeaders()
+        : {
+            ...getJsonHeaders(),
+            "Content-Type": "application/json",
+          },
+      body: hasAttachments
+        ? (() => {
+            const formData = new FormData();
+            formData.append("message", input.message);
+            formData.append(
+              "internal_notes",
+              input.visibility === "Internal" ? input.message : ""
+            );
+            (input.attachments ?? []).forEach((file) => {
+              formData.append("attachments[]", file);
+            });
+            return formData;
+          })()
+        : JSON.stringify({
+            message: input.message,
+            internal_notes: input.visibility === "Internal" ? input.message : null,
+          }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to update reply."));
+  }
+}
+
+export async function deleteTicketReply(input: { ticketId: string; threadId: string }) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/tickets/${input.ticketId}/threads/${input.threadId}`,
+    {
+      method: "DELETE",
+      headers: getJsonHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to delete reply."));
   }
 }

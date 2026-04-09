@@ -2,18 +2,20 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, MessageSquareReply, Paperclip, SendHorizontal } from "lucide-react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Paperclip, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketPriorityDropdown } from "@/components/ticket-priority-dropdown";
 import { TicketStatusDropdown } from "@/components/ticket-status-dropdown";
 import { Button } from "@/components/ui/button";
 import {
   createTicketReply,
+  deleteTicketReply,
   fetchTicketDependencies,
   fetchTicketDetail,
   type TicketAssigneeOption,
   type TicketCategoryOption,
+  updateTicketReply,
   updateTicketFields,
 } from "@/lib/tickets-api";
 import {
@@ -58,6 +60,45 @@ function formatRequesterName(createdBy: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function getAttachmentLabel(source: string): string {
+  if (!source) return "attachment";
+  try {
+    const normalized = source.startsWith("http") ? source : `https://example.com/${source}`;
+    const parsed = new URL(normalized);
+    const pathPart = parsed.pathname.split("/").filter(Boolean).pop();
+    return pathPart ? decodeURIComponent(pathPart) : source;
+  } catch {
+    const candidate = source.split("/").pop();
+    return candidate ? decodeURIComponent(candidate) : source;
+  }
+}
+
+const ALLOWED_REPLY_ATTACHMENT_EXTENSIONS = new Set([
+  "jpeg",
+  "jpg",
+  "png",
+  "gif",
+  "bmp",
+  "svg",
+  "webp",
+  "pdf",
+]);
+const REPLY_ATTACHMENT_ACCEPT = ".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.pdf";
+const MAX_REPLY_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+function validateReplyAttachments(files: File[]): string | null {
+  for (const file of files) {
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!ALLOWED_REPLY_ATTACHMENT_EXTENSIONS.has(extension)) {
+      return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, PDF.`;
+    }
+    if (file.size > MAX_REPLY_ATTACHMENT_BYTES) {
+      return `"${file.name}" is larger than 50MB.`;
+    }
+  }
+  return null;
 }
 
 /** Parse stored ticket/reply timestamps (e.g. "2026-01-07 17:22" or ISO). */
@@ -153,11 +194,19 @@ export default function TicketDetailsPage() {
   const [assigneeOptions, setAssigneeOptions] = useState<TicketAssigneeOption[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState("");
   const [replyVisibility, setReplyVisibility] = useState<"Public" | "Internal">(
     "Public"
   );
-  const [replyParentId, setReplyParentId] = useState<string | null>(null);
+  const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
+  const [editingReplyMessage, setEditingReplyMessage] = useState("");
+  const [isReplySubmitting, setIsReplySubmitting] = useState(false);
+  const [isReplyDeletingId, setIsReplyDeletingId] = useState<string | null>(null);
+  const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
+  const replyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingReplyAttachments, setEditingReplyAttachments] = useState<File[]>([]);
+  const editingReplyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -192,6 +241,12 @@ export default function TicketDetailsPage() {
     };
   }, [params.ticketId]);
 
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = setTimeout(() => setSuccessMessage(null), 2500);
+    return () => clearTimeout(timer);
+  }, [successMessage]);
+
   const ticketId = params.ticketId;
   const matchedTicket = useMemo(
     () => tickets.find((item) => item.id === ticketId) ?? null,
@@ -222,6 +277,13 @@ export default function TicketDetailsPage() {
     [ticket]
   );
 
+  const canManageReplies = canManageLifecycle || canUseInternalNotes;
+
+  const reloadCurrentTicket = async (id: string) => {
+    const refreshedTicket = await fetchTicketDetail(id);
+    setTickets([refreshedTicket]);
+  };
+
   const updateTicket = async (updates: Partial<Ticket>) => {
     if (!ticket) return;
 
@@ -231,24 +293,42 @@ export default function TicketDetailsPage() {
       categoryId?: number;
       assignedTo?: number | null;
     } = {};
+    let successNotice = "Ticket updated.";
+    let errorNotice = "Unable to update ticket.";
 
-    if (updates.status) payload.status = updates.status;
-    if (updates.priority) payload.priority = updates.priority;
+    if (updates.status) {
+      payload.status = updates.status;
+      successNotice = "Status updated successfully.";
+      errorNotice = "Unable to update status.";
+    }
+    if (updates.priority) {
+      payload.priority = updates.priority;
+      successNotice = "Priority updated successfully.";
+      errorNotice = "Unable to update priority.";
+    }
     if (updates.category) {
       const category = categoryOptions.find((entry) => entry.name === updates.category);
-      if (category) payload.categoryId = category.id;
+      if (category) {
+        payload.categoryId = category.id;
+        successNotice = "Issue type updated successfully.";
+        errorNotice = "Unable to update issue type.";
+      }
     }
     if (updates.assignedTo !== undefined) {
       const assignee = assigneeOptions.find((entry) => entry.name === updates.assignedTo);
       payload.assignedTo = assignee?.id ?? null;
+      successNotice = "Assignee updated successfully.";
+      errorNotice = "Unable to update assignee.";
     }
 
     try {
       await updateTicketFields(ticket.id, payload);
-      const refreshedTicket = await fetchTicketDetail(ticket.id);
-      setTickets([refreshedTicket]);
+      await reloadCurrentTicket(ticket.id);
+      setErrorMessage(null);
+      setSuccessMessage(successNotice);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update ticket.");
+      setSuccessMessage(null);
+      setErrorMessage(error instanceof Error ? error.message : errorNotice);
     }
   };
 
@@ -256,19 +336,151 @@ export default function TicketDetailsPage() {
     event.preventDefault();
     if (!ticket || !replyMessage.trim()) return;
     if (replyVisibility === "Internal" && !canUseInternalNotes) return;
+    setIsReplySubmitting(true);
     try {
       await createTicketReply({
         ticketId: ticket.id,
         message: replyMessage.trim(),
         visibility: replyVisibility,
+        attachments: replyAttachments,
       });
-      const refreshedTicket = await fetchTicketDetail(ticket.id);
-      setTickets([refreshedTicket]);
+      await reloadCurrentTicket(ticket.id);
       setReplyMessage("");
       setReplyVisibility("Public");
-      setReplyParentId(null);
+      setReplyAttachments([]);
+      if (replyAttachmentsInputRef.current) {
+        replyAttachmentsInputRef.current.value = "";
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to add reply.");
+    } finally {
+      setIsReplySubmitting(false);
+    }
+  };
+
+  const openReplyAttachmentPicker = () => {
+    replyAttachmentsInputRef.current?.click();
+  };
+
+  const handleReplyAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    const validationError = validateReplyAttachments(files);
+    if (validationError) {
+      setErrorMessage(validationError);
+      setReplyAttachments([]);
+      if (replyAttachmentsInputRef.current) {
+        replyAttachmentsInputRef.current.value = "";
+      }
+      return;
+    }
+    setErrorMessage(null);
+    setReplyAttachments(files);
+  };
+
+  const removeSelectedReplyAttachment = (index: number) => {
+    setReplyAttachments((current) => {
+      const next = current.filter((_, i) => i !== index);
+      if (next.length === 0 && replyAttachmentsInputRef.current) {
+        replyAttachmentsInputRef.current.value = "";
+      }
+      return next;
+    });
+  };
+
+  const clearSelectedReplyAttachments = () => {
+    setReplyAttachments([]);
+    if (replyAttachmentsInputRef.current) {
+      replyAttachmentsInputRef.current.value = "";
+    }
+  };
+
+  const startEditingReply = (reply: Reply) => {
+    setEditingReplyId(reply.id);
+    setEditingReplyMessage(reply.message);
+    setEditingReplyAttachments([]);
+    if (editingReplyAttachmentsInputRef.current) {
+      editingReplyAttachmentsInputRef.current.value = "";
+    }
+  };
+
+  const cancelEditingReply = () => {
+    setEditingReplyId(null);
+    setEditingReplyMessage("");
+    setEditingReplyAttachments([]);
+    if (editingReplyAttachmentsInputRef.current) {
+      editingReplyAttachmentsInputRef.current.value = "";
+    }
+  };
+
+  const saveEditingReply = async (reply: Reply) => {
+    if (!ticket || !editingReplyMessage.trim()) return;
+    setIsReplySubmitting(true);
+    try {
+      await updateTicketReply({
+        ticketId: ticket.id,
+        threadId: reply.id,
+        message: editingReplyMessage.trim(),
+        visibility: reply.visibility,
+        attachments: editingReplyAttachments,
+      });
+      await reloadCurrentTicket(ticket.id);
+      cancelEditingReply();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update reply.");
+    } finally {
+      setIsReplySubmitting(false);
+    }
+  };
+
+  const removeReply = async (replyId: string) => {
+    if (!ticket) return;
+    setIsReplyDeletingId(replyId);
+    try {
+      await deleteTicketReply({
+        ticketId: ticket.id,
+        threadId: replyId,
+      });
+      await reloadCurrentTicket(ticket.id);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to delete reply.");
+    } finally {
+      setIsReplyDeletingId(null);
+    }
+  };
+
+  const openEditingReplyAttachmentPicker = () => {
+    editingReplyAttachmentsInputRef.current?.click();
+  };
+
+  const handleEditingReplyAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    const validationError = validateReplyAttachments(files);
+    if (validationError) {
+      setErrorMessage(validationError);
+      setEditingReplyAttachments([]);
+      if (editingReplyAttachmentsInputRef.current) {
+        editingReplyAttachmentsInputRef.current.value = "";
+      }
+      return;
+    }
+    setErrorMessage(null);
+    setEditingReplyAttachments(files);
+  };
+
+  const removeSelectedEditingReplyAttachment = (index: number) => {
+    setEditingReplyAttachments((current) => {
+      const next = current.filter((_, i) => i !== index);
+      if (next.length === 0 && editingReplyAttachmentsInputRef.current) {
+        editingReplyAttachmentsInputRef.current.value = "";
+      }
+      return next;
+    });
+  };
+
+  const clearSelectedEditingReplyAttachments = () => {
+    setEditingReplyAttachments([]);
+    if (editingReplyAttachmentsInputRef.current) {
+      editingReplyAttachmentsInputRef.current.value = "";
     }
   };
 
@@ -303,43 +515,155 @@ export default function TicketDetailsPage() {
     setTickets(nextTickets);
   };
 
-  const renderReplies = (parentId: string | null, depth = 0): React.ReactNode => {
-    const children = visibleReplies.filter((reply) =>
-      parentId === null ? !reply.parentId : reply.parentId === parentId
-    );
-    if (children.length === 0) return null;
-
-    return children.map((reply) => (
-      <div key={reply.id} className={depth > 0 ? "ml-4 border-l border-slate-200 pl-3" : ""}>
-        <div className="rounded-none bg-slate-50 p-2">
+  const renderReplies = (): React.ReactNode =>
+    visibleReplies.map((reply) => {
+      const isEditing = editingReplyId === reply.id;
+      return (
+        <div key={reply.id} className="rounded-none bg-slate-50 p-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-slate-500">
               {reply.author} - {reply.createdAt}
             </p>
-            <span
-              className={`rounded-none px-2 py-0.5 text-[11px] font-medium ${
-                reply.visibility === "Internal"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-blue-50 text-blue-800"
-              }`}
-            >
-              {reply.visibility}
-            </span>
+            <div className="flex items-center gap-2">
+              <span
+                className={`rounded-none px-2 py-0.5 text-[11px] font-medium ${
+                  reply.visibility === "Internal"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-blue-50 text-blue-800"
+                }`}
+              >
+                {reply.visibility}
+              </span>
+              {canManageReplies ? (
+                <>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-primary"
+                    onClick={() => startEditingReply(reply)}
+                  >
+                    <Pencil className="size-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-800"
+                    onClick={() => void removeReply(reply.id)}
+                    disabled={isReplyDeletingId === reply.id}
+                  >
+                    <Trash2 className="size-3.5" />
+                    {isReplyDeletingId === reply.id ? "Deleting..." : "Delete"}
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
-          <p className="mt-1 text-sm text-slate-700">{reply.message}</p>
-          <button
-            type="button"
-            className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-primary hover:underline"
-            onClick={() => setReplyParentId(reply.id)}
-          >
-            <MessageSquareReply className="size-3.5 shrink-0 opacity-80" aria-hidden />
-            Reply in thread
-          </button>
+          {isEditing ? (
+            <div className="mt-2 space-y-2">
+              <input
+                ref={editingReplyAttachmentsInputRef}
+                type="file"
+                name="editing_reply_attachments"
+                className="hidden"
+                multiple
+                accept={REPLY_ATTACHMENT_ACCEPT}
+                onChange={handleEditingReplyAttachmentChange}
+              />
+              <textarea
+                className="min-h-20 w-full resize-none border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                value={editingReplyMessage}
+                onChange={(event) => setEditingReplyMessage(event.target.value)}
+              />
+              {(reply.attachments ?? []).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {(reply.attachments ?? []).map((attachment) => (
+                    <a
+                      key={`${reply.id}-current-${attachment}`}
+                      href={attachment}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:border-slate-400 hover:text-slate-900"
+                    >
+                      {getAttachmentLabel(attachment)}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+              {editingReplyAttachments.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {editingReplyAttachments.map((file, index) => (
+                    <span
+                      key={`${reply.id}-new-${file.name}-${index}`}
+                      className="inline-flex items-center gap-1 rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                    >
+                      <span className="max-w-52 truncate">{file.name}</span>
+                      <button
+                        type="button"
+                        className="text-slate-500 hover:text-slate-900"
+                        onClick={() => removeSelectedEditingReplyAttachment(index)}
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={openEditingReplyAttachmentPicker}
+                  className="inline-flex size-8 items-center justify-center text-slate-400 transition-colors hover:text-primary"
+                  aria-label="Attach file while editing"
+                  disabled={isReplySubmitting}
+                >
+                  <Paperclip className="size-4" />
+                </button>
+                {editingReplyAttachments.length > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                    onClick={clearSelectedEditingReplyAttachments}
+                    disabled={isReplySubmitting}
+                  >
+                    Clear all
+                  </button>
+                ) : null}
+                <Button type="button" variant="outline" size="sm" onClick={cancelEditingReply}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void saveEditingReply(reply)}
+                  disabled={isReplySubmitting}
+                >
+                  {isReplySubmitting ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="mt-1 text-sm text-slate-700">{reply.message}</p>
+              {(reply.attachments ?? []).length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(reply.attachments ?? []).map((attachment) => (
+                    <a
+                      key={`${reply.id}-${attachment}`}
+                      href={attachment}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:border-slate-400 hover:text-slate-900"
+                    >
+                      {getAttachmentLabel(attachment)}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
-        <div className="mt-2">{renderReplies(reply.id, depth + 1)}</div>
-      </div>
-    ));
-  };
+      );
+    });
 
   if (!isHydrated) {
     return (
@@ -356,6 +680,11 @@ export default function TicketDetailsPage() {
           {errorMessage ? (
             <div className="border border-rose-200 bg-rose-50 px-4 py-3">
               <p className="text-sm text-rose-700">{errorMessage}</p>
+            </div>
+          ) : null}
+          {successMessage ? (
+            <div className="border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm text-emerald-700">{successMessage}</p>
             </div>
           ) : null}
           <div className="flex items-center justify-between gap-2">
@@ -391,7 +720,7 @@ export default function TicketDetailsPage() {
                 You do not have permission to view this ticket.
               </p>
             </div>
-          ) : (
+          ) : ticket ? (
             <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px]">
               <div className="space-y-4">
               <section className="border-b border-slate-200 pb-5">
@@ -455,22 +784,10 @@ export default function TicketDetailsPage() {
                   {visibleReplies.length === 0 ? (
                     <p className="text-sm text-slate-500">No replies yet.</p>
                   ) : (
-                    renderReplies(null)
+                    renderReplies()
                   )}
                 </div>
                 <form className="mt-4 border border-slate-200 bg-white" onSubmit={addReply}>
-                  {replyParentId ? (
-                    <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                      <span>Replying in thread</span>
-                      <button
-                        type="button"
-                        className="font-medium text-slate-700 hover:text-primary hover:underline"
-                        onClick={() => setReplyParentId(null)}
-                      >
-                        Cancel thread reply
-                      </button>
-                    </div>
-                  ) : null}
                   <div className="border-t-4 border-t-primary px-4 py-4">
                     <div className="flex items-end gap-6 border-b border-slate-200">
                       <button
@@ -499,21 +816,66 @@ export default function TicketDetailsPage() {
                       ) : null}
                     </div>
                     <div className="mt-4 border border-slate-200 bg-slate-100 p-4">
+                      <input
+                        ref={replyAttachmentsInputRef}
+                        type="file"
+                        name="reply_attachments"
+                        className="hidden"
+                        multiple
+                        accept={REPLY_ATTACHMENT_ACCEPT}
+                        onChange={handleReplyAttachmentChange}
+                      />
                       <textarea
                         className="min-h-28 w-full resize-none border-0 bg-transparent px-2 py-1 text-sm text-slate-700 placeholder:text-slate-400 focus-visible:outline-none"
                         placeholder="Type your response here..."
                         value={replyMessage}
                         onChange={(event) => setReplyMessage(event.target.value)}
                       />
+                      {replyAttachments.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {replyAttachments.map((file, index) => (
+                            <span
+                              key={`new-reply-${file.name}-${index}`}
+                              className="inline-flex items-center gap-1 rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                            >
+                              <span className="max-w-52 truncate">{file.name}</span>
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-900"
+                                onClick={() => removeSelectedReplyAttachment(index)}
+                                aria-label={`Remove ${file.name}`}
+                              >
+                                <X className="size-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="mt-3 flex items-center justify-end gap-2">
                         <button
                           type="button"
+                          onClick={openReplyAttachmentPicker}
                           className="inline-flex size-10 items-center justify-center text-slate-400 transition-colors hover:text-primary"
                           aria-label="Attach file"
+                          disabled={isReplySubmitting}
                         >
                           <Paperclip className="size-4" />
                         </button>
-                        <Button type="submit" className="min-w-44 gap-2 px-5 text-sm font-semibold">
+                        {replyAttachments.length > 0 ? (
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                            onClick={clearSelectedReplyAttachments}
+                            disabled={isReplySubmitting}
+                          >
+                            Clear all
+                          </button>
+                        ) : null}
+                        <Button
+                          type="submit"
+                          className="min-w-44 gap-2 px-5 text-sm font-semibold"
+                          disabled={isReplySubmitting}
+                        >
                           Send Update
                           <SendHorizontal className="size-4" />
                         </Button>
@@ -548,7 +910,7 @@ export default function TicketDetailsPage() {
                         { label: "Org ID", value: ticket.organizationId },
                         { label: "Parent Org ID", value: ticket.parentOrganizationId ?? "—" },
                         { label: "Priority", value: ticket.priority },
-                        { label: "Company Name", value: "Oz Designs" },
+                        { label: "Company Name", value: ticket.companyName ?? "—" },
                         { label: "Issue Type", value: ticket.category },
                       ].map((row) => (
                         <div
@@ -673,7 +1035,7 @@ export default function TicketDetailsPage() {
                 </section>
               </aside>
             </div>
-          )}
+          ) : null}
         </div>
       </section>
     </>

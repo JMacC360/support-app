@@ -18,6 +18,7 @@ export type Reply = {
   author: string;
   message: string;
   createdAt: string;
+  attachments?: string[];
 };
 
 export type Ticket = {
@@ -34,6 +35,7 @@ export type Ticket = {
   ownerOrgId: string;
   organizationId: string;
   parentOrganizationId: string | null;
+  companyName?: string;
   assignedTo: Role;
   escalated: boolean;
   escalatedToAdminAt?: string;

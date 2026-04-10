@@ -96,12 +96,6 @@ export function LoginForm() {
         <h1 className="mt-3 text-center text-2xl font-semibold tracking-tight text-slate-900">
           Sign in
         </h1>
-        <div className="mt-2 rounded-none border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
-          <p className="font-medium text-slate-700">Connected to support API</p>
-          <p className="mt-1">
-            Sign in with a backend user account from your Laravel auth database.
-          </p>
-        </div>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700" htmlFor="login-email">

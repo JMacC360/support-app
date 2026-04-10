@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import {
   createTicketReply,
   deleteTicketReply,
+  fetchProtectedAttachmentBlob,
   fetchTicketDependencies,
   fetchTicketDetail,
   type TicketAssigneeOption,
@@ -33,25 +34,6 @@ import {
   type TicketStatus,
 } from "@/lib/tickets";
 
-function buildDummyAttachmentPreview(name: string) {
-  const safeName = name.trim() || "attachment";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
-    <defs>
-      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#dbeafe" />
-        <stop offset="100%" stop-color="#e2e8f0" />
-      </linearGradient>
-    </defs>
-    <rect width="640" height="360" fill="url(#bg)" />
-    <rect x="40" y="40" width="560" height="280" rx="16" fill="#ffffff" opacity="0.82" />
-    <text x="320" y="168" text-anchor="middle" font-family="Inter, sans-serif" font-size="22" fill="#334155">Attachment Preview</text>
-    <text x="320" y="204" text-anchor="middle" font-family="Inter, sans-serif" font-size="18" fill="#1e3a8a">${safeName}</text>
-  </svg>`;
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  const downloadName = safeName.includes(".") ? safeName : `${safeName}.svg`;
-  return { url, downloadName };
-}
-
 function formatRequesterName(createdBy: string) {
   const base = createdBy.includes("@") ? createdBy.split("@")[0] : createdBy;
   return base
@@ -73,6 +55,14 @@ function getAttachmentLabel(source: string): string {
     const candidate = source.split("/").pop();
     return candidate ? decodeURIComponent(candidate) : source;
   }
+}
+
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(["jpeg", "jpg", "png", "gif", "bmp", "svg", "webp"]);
+
+function isImageAttachment(source: string): boolean {
+  const label = getAttachmentLabel(source).toLowerCase();
+  const ext = label.split(".").pop()?.split("?")[0] ?? "";
+  return IMAGE_ATTACHMENT_EXTENSIONS.has(ext);
 }
 
 const ALLOWED_REPLY_ATTACHMENT_EXTENSIONS = new Set([
@@ -99,6 +89,98 @@ function validateReplyAttachments(files: File[]): string | null {
     }
   }
   return null;
+}
+
+function renderReplyAttachments(
+  attachments: string[],
+  keyPrefix: string,
+  onImageClick: (attachment: string, label: string) => void
+): React.ReactNode {
+  if (attachments.length === 0) return null;
+
+  return (
+    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+      {attachments.map((attachment) => {
+        const label = getAttachmentLabel(attachment);
+        const isImage = isImageAttachment(attachment);
+
+        if (!isImage) {
+          return (
+            <button
+              key={`${keyPrefix}-${attachment}`}
+              type="button"
+              className="rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:border-slate-400 hover:text-slate-900"
+              onClick={() => {
+                void openProtectedAttachmentFile(attachment);
+              }}
+            >
+              {label}
+            </button>
+          );
+        }
+
+        return (
+          <button
+            key={`${keyPrefix}-${attachment}`}
+            type="button"
+            className="block overflow-hidden rounded-none border border-slate-300 bg-white hover:border-slate-400"
+            onClick={() => {
+              onImageClick(attachment, label);
+            }}
+          >
+            <ProtectedAttachmentImage attachment={attachment} label={label} />
+            <p className="truncate border-t border-slate-200 px-2 py-1 text-xs text-slate-700">{label}</p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+async function openProtectedAttachmentFile(attachment: string) {
+  const blob = await fetchProtectedAttachmentBlob(attachment);
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function ProtectedAttachmentImage({ attachment, label }: { attachment: string; label: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    let objectUrl: string | null = null;
+
+    const loadImage = async () => {
+      try {
+        const blob = await fetchProtectedAttachmentBlob(attachment);
+        if (!isActive) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl(objectUrl);
+      } catch {
+        if (!isActive) return;
+        setPreviewUrl(null);
+      }
+    };
+
+    void loadImage();
+    return () => {
+      isActive = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [attachment]);
+
+  if (!previewUrl) {
+    return (
+      <div className="flex h-28 w-full items-center justify-center bg-slate-100 text-xs text-slate-500">
+        Loading preview...
+      </div>
+    );
+  }
+
+  return <img src={previewUrl} alt={label} className="h-28 w-full object-cover" />;
 }
 
 /** Parse stored ticket/reply timestamps (e.g. "2026-01-07 17:22" or ISO). */
@@ -207,6 +289,12 @@ export default function TicketDetailsPage() {
   const replyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
   const [editingReplyAttachments, setEditingReplyAttachments] = useState<File[]>([]);
   const editingReplyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
+  const [fullscreenImageAttachment, setFullscreenImageAttachment] = useState<{
+    attachment: string;
+    label: string;
+  } | null>(null);
+  const [fullscreenImageUrl, setFullscreenImageUrl] = useState<string | null>(null);
+  const [isFullscreenImageLoading, setIsFullscreenImageLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -247,6 +335,58 @@ export default function TicketDetailsPage() {
     return () => clearTimeout(timer);
   }, [successMessage]);
 
+  useEffect(() => {
+    if (!fullscreenImageAttachment) {
+      setFullscreenImageUrl(null);
+      setIsFullscreenImageLoading(false);
+      return;
+    }
+
+    let isActive = true;
+    let objectUrl: string | null = null;
+    setIsFullscreenImageLoading(true);
+
+    const loadFullscreenImage = async () => {
+      try {
+        const blob = await fetchProtectedAttachmentBlob(fullscreenImageAttachment.attachment);
+        if (!isActive) return;
+        objectUrl = URL.createObjectURL(blob);
+        setFullscreenImageUrl(objectUrl);
+      } catch {
+        if (!isActive) return;
+        setFullscreenImageUrl(null);
+        setErrorMessage("Unable to load attachment preview.");
+      } finally {
+        if (isActive) {
+          setIsFullscreenImageLoading(false);
+        }
+      }
+    };
+
+    void loadFullscreenImage();
+    return () => {
+      isActive = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [fullscreenImageAttachment]);
+
+  useEffect(() => {
+    if (!fullscreenImageAttachment) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFullscreenImageAttachment(null);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [fullscreenImageAttachment]);
+
   const ticketId = params.ticketId;
   const matchedTicket = useMemo(
     () => tickets.find((item) => item.id === ticketId) ?? null,
@@ -278,6 +418,14 @@ export default function TicketDetailsPage() {
   );
 
   const canManageReplies = canManageLifecycle || canUseInternalNotes;
+
+  const openFullscreenImage = (attachment: string, label: string) => {
+    setFullscreenImageAttachment({ attachment, label });
+  };
+
+  const closeFullscreenImage = () => {
+    setFullscreenImageAttachment(null);
+  };
 
   const reloadCurrentTicket = async (id: string) => {
     const refreshedTicket = await fetchTicketDetail(id);
@@ -573,21 +721,11 @@ export default function TicketDetailsPage() {
                 value={editingReplyMessage}
                 onChange={(event) => setEditingReplyMessage(event.target.value)}
               />
-              {(reply.attachments ?? []).length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {(reply.attachments ?? []).map((attachment) => (
-                    <a
-                      key={`${reply.id}-current-${attachment}`}
-                      href={attachment}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:border-slate-400 hover:text-slate-900"
-                    >
-                      {getAttachmentLabel(attachment)}
-                    </a>
-                  ))}
-                </div>
-              ) : null}
+              {renderReplyAttachments(
+                reply.attachments ?? [],
+                `${reply.id}-current`,
+                openFullscreenImage
+              )}
               {editingReplyAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {editingReplyAttachments.map((file, index) => (
@@ -644,21 +782,7 @@ export default function TicketDetailsPage() {
           ) : (
             <>
               <p className="mt-1 text-sm text-slate-700">{reply.message}</p>
-              {(reply.attachments ?? []).length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(reply.attachments ?? []).map((attachment) => (
-                    <a
-                      key={`${reply.id}-${attachment}`}
-                      href={attachment}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:border-slate-400 hover:text-slate-900"
-                    >
-                      {getAttachmentLabel(attachment)}
-                    </a>
-                  ))}
-                </div>
-              ) : null}
+              {renderReplyAttachments(reply.attachments ?? [], reply.id, openFullscreenImage)}
             </>
           )}
         </div>
@@ -746,23 +870,34 @@ export default function TicketDetailsPage() {
                   ) : (
                     <div className="grid gap-3 sm:grid-cols-2">
                       {ticket.attachments.map((attachment) => {
-                        const preview = buildDummyAttachmentPreview(attachment);
+                        const label = getAttachmentLabel(attachment);
+                        const isImage = isImageAttachment(attachment);
                         return (
                           <div key={attachment} className="rounded-none border border-slate-200 bg-slate-50 p-2">
-                            <img
-                              src={preview.url}
-                              alt={`Attachment ${attachment}`}
-                              className="h-28 w-full rounded object-cover"
-                            />
-                            <div className="mt-2 flex items-center justify-between gap-2">
-                              <p className="truncate text-xs text-slate-700">{attachment}</p>
-                              <a
-                                href={preview.url}
-                                download={preview.downloadName}
-                                className="rounded-none border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            {isImage ? (
+                              <button
+                                type="button"
+                                className="block w-full overflow-hidden border border-slate-200 bg-white hover:border-slate-300"
+                                onClick={() => openFullscreenImage(attachment, label)}
                               >
-                                Download
-                              </a>
+                                <ProtectedAttachmentImage attachment={attachment} label={label} />
+                              </button>
+                            ) : (
+                              <div className="flex h-28 w-full items-center justify-center border border-slate-200 bg-white text-xs text-slate-500">
+                                File attachment
+                              </div>
+                            )}
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                              <p className="truncate text-xs text-slate-700">{label}</p>
+                              <button
+                                type="button"
+                                className="rounded-none border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                onClick={() => {
+                                  void openProtectedAttachmentFile(attachment);
+                                }}
+                              >
+                                Open
+                              </button>
                             </div>
                           </div>
                         );
@@ -1038,6 +1173,40 @@ export default function TicketDetailsPage() {
           ) : null}
         </div>
       </section>
+      {fullscreenImageAttachment ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
+          onClick={closeFullscreenImage}
+        >
+          <div
+            className="relative max-h-[95vh] max-w-[95vw]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute right-2 top-2 z-10 rounded-none bg-black/60 px-2 py-1 text-xs font-medium text-white hover:bg-black/80"
+              onClick={closeFullscreenImage}
+            >
+              Close
+            </button>
+            {isFullscreenImageLoading ? (
+              <div className="flex h-[60vh] w-[80vw] max-w-5xl items-center justify-center bg-slate-900 text-sm text-slate-100">
+                Loading image...
+              </div>
+            ) : fullscreenImageUrl ? (
+              <img
+                src={fullscreenImageUrl}
+                alt={fullscreenImageAttachment.label}
+                className="max-h-[95vh] max-w-[95vw] object-contain"
+              />
+            ) : (
+              <div className="flex h-[60vh] w-[80vw] max-w-5xl items-center justify-center bg-slate-900 text-sm text-slate-100">
+                Unable to preview image.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

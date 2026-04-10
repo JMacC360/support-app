@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp, Plus, Tag, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,22 @@ export default function CreateTicketPage() {
   const [newCategoryDescription, setNewCategoryDescription] = useState("");
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
   const [categoryPanelError, setCategoryPanelError] = useState<string | null>(null);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const hasCategoryOptions = categoryOptions.length > 0;
+
+  const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+    "jpeg",
+    "jpg",
+    "png",
+    "gif",
+    "bmp",
+    "svg",
+    "webp",
+    "pdf",
+  ]);
+  const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
   useEffect(() => {
     let active = true;
@@ -72,6 +87,82 @@ export default function CreateTicketPage() {
   }, []);
 
   const resolvedAssignee = useMemo(() => manualAssignee, [manualAssignee]);
+
+  const validateAttachments = (files: File[]): string | null => {
+    for (const file of files) {
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
+        return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, PDF.`;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        return `"${file.name}" is larger than 50MB.`;
+      }
+    }
+    return null;
+  };
+
+  const openAttachmentPicker = () => {
+    attachmentInputRef.current?.click();
+  };
+
+  const applySelectedAttachments = (selected: File[]) => {
+    const error = validateAttachments(selected);
+    if (error) {
+      setErrorMessage(error);
+      setAttachmentFiles([]);
+      if (attachmentInputRef.current) {
+        attachmentInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setErrorMessage(null);
+    setAttachmentFiles(selected);
+  };
+
+  const onAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+    applySelectedAttachments(selected);
+  };
+
+  const onAttachmentDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragActive(true);
+  };
+
+  const onAttachmentDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragActive(false);
+  };
+
+  const onAttachmentDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragActive(false);
+
+    const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+    if (droppedFiles.length === 0) return;
+    applySelectedAttachments(droppedFiles);
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachmentFiles((current) => {
+      const next = current.filter((_, i) => i !== index);
+      if (next.length === 0 && attachmentInputRef.current) {
+        attachmentInputRef.current.value = "";
+      }
+      return next;
+    });
+  };
+
+  const clearAttachments = () => {
+    setAttachmentFiles([]);
+    if (attachmentInputRef.current) {
+      attachmentInputRef.current.value = "";
+    }
+  };
 
   const handleCreateCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -127,6 +218,7 @@ export default function CreateTicketPage() {
         categoryId: selectedCategory.id,
         priority,
         assignedTo: resolvedAssignee ? Number(resolvedAssignee) : null,
+        attachments: attachmentFiles,
       });
 
       router.push(`/tickets/${createdTicket.id}`);
@@ -279,18 +371,69 @@ export default function CreateTicketPage() {
               </div>
             </div>
 
-            <div className="border border-dashed border-slate-300 bg-slate-50 bg-white p-6">
+            <div
+              className={`border border-dashed bg-white p-6 transition-colors ${
+                isDragActive ? "border-primary bg-primary/5" : "border-slate-300"
+              }`}
+              onDragOver={onAttachmentDragOver}
+              onDragEnter={onAttachmentDragOver}
+              onDragLeave={onAttachmentDragLeave}
+              onDrop={onAttachmentDrop}
+            >
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                name="ticket_attachments"
+                className="hidden"
+                multiple
+                accept=".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.pdf"
+                onChange={onAttachmentChange}
+              />
               <div className="flex flex-col items-center justify-center text-center">
                 <div className="mb-4 flex size-16 items-center justify-center bg-white text-primary shadow-sm">
                   <FileUp className="size-8" aria-hidden />
                 </div>
                 <p className="text-1xl font-semibold text-primary">Upload Attachments</p>
                 <p className="mt-1 text-base text-slate-700">
-                  Drag and drop files or <span className="font-semibold text-primary">browse</span>
+                  Drag and drop files or{" "}
+                  <button
+                    type="button"
+                    className="font-semibold text-primary hover:underline"
+                    onClick={openAttachmentPicker}
+                  >
+                    browse
+                  </button>
                 </p>
                 <p className="mt-4 text-xs uppercase text-slate-600">
-                  Max file size: 25MB (PNG, JPG)
+                  Max file size: 50MB (JPG, PNG, GIF, BMP, SVG, WEBP, PDF)
                 </p>
+                {attachmentFiles.length > 0 ? (
+                  <div className="mt-4 flex w-full flex-wrap justify-center gap-2">
+                    {attachmentFiles.map((file, index) => (
+                      <span
+                        key={`${file.name}-${index}`}
+                        className="inline-flex items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                      >
+                        <span className="max-w-64 truncate">{file.name}</span>
+                        <button
+                          type="button"
+                          className="text-slate-500 hover:text-slate-900"
+                          onClick={() => removeAttachment(index)}
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                      onClick={clearAttachments}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           </section>

@@ -202,6 +202,7 @@ export async function createTicket(input: {
   categoryId: number;
   priority: string;
   assignedTo?: number | null;
+  attachments?: File[];
 }) {
   const accessToken = getAccessToken();
   if (!accessToken) {
@@ -216,6 +217,9 @@ export async function createTicket(input: {
   if (input.assignedTo) {
     formData.append("assigned_to", String(input.assignedTo));
   }
+  (input.attachments ?? []).forEach((file) => {
+    formData.append("attachments[]", file);
+  });
 
   const response = await fetch(`${getApiBaseUrl()}/tickets`, {
     method: "POST",
@@ -433,4 +437,20 @@ export async function deleteTicketReply(input: { ticketId: string; threadId: str
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Unable to delete reply."));
   }
+}
+
+export async function fetchProtectedAttachmentBlob(attachmentUrl: string): Promise<Blob> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/attachments/proxy?url=${encodeURIComponent(attachmentUrl)}`,
+    {
+      method: "GET",
+      headers: getJsonHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to load attachment."));
+  }
+
+  return await response.blob();
 }

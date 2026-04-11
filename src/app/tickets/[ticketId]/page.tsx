@@ -33,6 +33,7 @@ import {
   type TicketCategory,
   type TicketStatus,
 } from "@/lib/tickets";
+import { loadAuthSession } from "@/lib/auth";
 
 function formatRequesterName(createdBy: string) {
   const base = createdBy.includes("@") ? createdBy.split("@")[0] : createdBy;
@@ -219,10 +220,78 @@ type InteractionEntry = {
   title: string;
   at: string;
   statusLabel: string;
+  action?: string;
+  actor?: string;
+  details?: Array<{
+    field: string;
+    label: string;
+    from: string;
+    to: string;
+  }>;
 };
+
+function getActivityActionLabel(action?: string): string | null {
+  if (!action) return null;
+
+  switch (action) {
+    case "ticket.created":
+      return "Ticket created";
+    case "ticket.updated":
+      return "Ticket updated";
+    case "ticket.status_updated":
+      return "Status changed";
+    case "ticket.deleted":
+      return "Ticket deleted";
+    case "ticket.thread_created":
+      return "Reply added";
+    case "ticket.thread_updated":
+      return "Reply updated";
+    case "ticket.thread_deleted":
+      return "Reply deleted";
+    default:
+      return "Update logged";
+  }
+}
+
+function getActivityDotClass(action: string | undefined, showActiveChrome: boolean): string {
+  if (showActiveChrome) return "bg-red-500";
+  if (!action) return "bg-slate-400";
+
+  switch (action) {
+    case "ticket.created":
+      return "bg-blue-500";
+    case "ticket.status_updated":
+      return "bg-amber-500";
+    case "ticket.thread_created":
+      return "bg-emerald-500";
+    case "ticket.thread_updated":
+      return "bg-indigo-500";
+    case "ticket.thread_deleted":
+    case "ticket.deleted":
+      return "bg-rose-500";
+    default:
+      return "bg-slate-400";
+  }
+}
 
 /** Newest-first timeline for the activity strip (root replies + ticket opened). */
 function buildInteractionTimeline(ticket: Ticket): InteractionEntry[] {
+  const apiActivityTimeline = (ticket.activityLog ?? [])
+    .slice()
+    .sort((a, b) => parseTicketTime(b.at) - parseTicketTime(a.at))
+    .map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      at: entry.at,
+      statusLabel: entry.statusLabel,
+      action: entry.action,
+      actor: entry.actor,
+      details: entry.details ?? [],
+    }));
+  if (apiActivityTimeline.length > 0) {
+    return apiActivityTimeline;
+  }
+
   const roots = ticket.replies
     .filter((r) => !r.parentId)
     .slice()
@@ -289,6 +358,13 @@ export default function TicketDetailsPage() {
   const replyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
   const [editingReplyAttachments, setEditingReplyAttachments] = useState<File[]>([]);
   const editingReplyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
+  const [isEditingTicketContent, setIsEditingTicketContent] = useState(false);
+  const [editedSubject, setEditedSubject] = useState("");
+  const [editedDescription, setEditedDescription] = useState("");
+  const [retainedTicketAttachments, setRetainedTicketAttachments] = useState<string[]>([]);
+  const [ticketAttachmentFiles, setTicketAttachmentFiles] = useState<File[]>([]);
+  const ticketAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const [isTicketContentSaving, setIsTicketContentSaving] = useState(false);
   const [fullscreenImageAttachment, setFullscreenImageAttachment] = useState<{
     attachment: string;
     label: string;
@@ -418,6 +494,18 @@ export default function TicketDetailsPage() {
   );
 
   const canManageReplies = canManageLifecycle || canUseInternalNotes;
+  const canEditTicketContent = Boolean(loadAuthSession()?.accessToken);
+  const displayedTicketAttachments =
+    ticket && canEditTicketContent && isEditingTicketContent
+      ? retainedTicketAttachments
+      : (ticket?.attachments ?? []);
+
+  useEffect(() => {
+    if (!ticket) return;
+    setEditedSubject(ticket.subject);
+    setEditedDescription(ticket.description);
+    setRetainedTicketAttachments(ticket.attachments);
+  }, [ticket]);
 
   const openFullscreenImage = (attachment: string, label: string) => {
     setFullscreenImageAttachment({ attachment, label });
@@ -477,6 +565,93 @@ export default function TicketDetailsPage() {
     } catch (error) {
       setSuccessMessage(null);
       setErrorMessage(error instanceof Error ? error.message : errorNotice);
+    }
+  };
+
+  const openTicketAttachmentPicker = () => {
+    ticketAttachmentInputRef.current?.click();
+  };
+
+  const onTicketAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    const validationError = validateReplyAttachments(files);
+    if (validationError) {
+      setErrorMessage(validationError);
+      setTicketAttachmentFiles([]);
+      if (ticketAttachmentInputRef.current) {
+        ticketAttachmentInputRef.current.value = "";
+      }
+      return;
+    }
+    setErrorMessage(null);
+    setTicketAttachmentFiles(files);
+  };
+
+  const removeTicketAttachment = (index: number) => {
+    setTicketAttachmentFiles((current) => {
+      const next = current.filter((_, i) => i !== index);
+      if (next.length === 0 && ticketAttachmentInputRef.current) {
+        ticketAttachmentInputRef.current.value = "";
+      }
+      return next;
+    });
+  };
+
+  const clearTicketAttachments = () => {
+    setTicketAttachmentFiles([]);
+    if (ticketAttachmentInputRef.current) {
+      ticketAttachmentInputRef.current.value = "";
+    }
+  };
+
+  const removeRetainedTicketAttachment = (attachmentToRemove: string) => {
+    setRetainedTicketAttachments((current) =>
+      current.filter((attachment) => attachment !== attachmentToRemove)
+    );
+  };
+
+  const startTicketContentEdit = () => {
+    if (!ticket) return;
+    setIsEditingTicketContent(true);
+    setEditedSubject(ticket.subject);
+    setEditedDescription(ticket.description);
+    setRetainedTicketAttachments(ticket.attachments);
+    clearTicketAttachments();
+  };
+
+  const resetTicketContentDraft = () => {
+    if (!ticket) return;
+    setIsEditingTicketContent(false);
+    setEditedSubject(ticket.subject);
+    setEditedDescription(ticket.description);
+    setRetainedTicketAttachments(ticket.attachments);
+    clearTicketAttachments();
+  };
+
+  const saveTicketContent = async () => {
+    if (!ticket) return;
+    if (!editedSubject.trim() || !editedDescription.trim()) {
+      setErrorMessage("Title and description are required.");
+      return;
+    }
+
+    setIsTicketContentSaving(true);
+    setErrorMessage(null);
+    try {
+      await updateTicketFields(ticket.id, {
+        subject: editedSubject.trim(),
+        description: editedDescription.trim(),
+        existingAttachments: retainedTicketAttachments,
+        attachments: ticketAttachmentFiles,
+      });
+      await reloadCurrentTicket(ticket.id);
+      setIsEditingTicketContent(false);
+      clearTicketAttachments();
+      setSuccessMessage("Ticket details updated successfully.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update ticket details.");
+    } finally {
+      setIsTicketContentSaving(false);
     }
   };
 
@@ -820,6 +995,15 @@ export default function TicketDetailsPage() {
               Back to tickets
             </Link>
             <div className="flex items-center gap-2">
+              {ticket && canEditTicketContent ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={isEditingTicketContent ? resetTicketContentDraft : startTicketContentEdit}
+                >
+                  {isEditingTicketContent ? "Cancel Edit" : "Edit"}
+                </Button>
+              ) : null}
               {canEscalateToAdmin ? (
                 <Button type="button" variant="outline" onClick={escalateToAdmin}>
                   Escalate to Admin
@@ -849,8 +1033,44 @@ export default function TicketDetailsPage() {
               <div className="space-y-4">
               <section className="border-b border-slate-200 pb-5">
                 <p className="text-xs font-medium tabular-nums text-slate-500">{ticket.id}</p>
-                <h2 className="mt-1 text-xl font-semibold text-slate-900">{ticket.subject}</h2>
-                <p className="mt-2 text-sm text-slate-600">{ticket.description}</p>
+                {canEditTicketContent && isEditingTicketContent ? (
+                  <div className="mt-2 space-y-2">
+                    <input
+                      className="w-full border border-slate-300 bg-white px-3 py-2 text-base text-slate-900"
+                      value={editedSubject}
+                      onChange={(event) => setEditedSubject(event.target.value)}
+                      placeholder="Ticket title"
+                    />
+                    <textarea
+                      className="min-h-28 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                      value={editedDescription}
+                      onChange={(event) => setEditedDescription(event.target.value)}
+                      placeholder="Ticket description"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={resetTicketContentDraft}
+                        disabled={isTicketContentSaving}
+                      >
+                        Reset
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => void saveTicketContent()}
+                        disabled={isTicketContentSaving}
+                      >
+                        {isTicketContentSaving ? "Saving..." : "Save details"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <h2 className="mt-1 text-xl font-semibold text-slate-900">{ticket.subject}</h2>
+                    <p className="mt-2 text-sm text-slate-600">{ticket.description}</p>
+                  </>
+                )}
                 <p className="mt-2 text-xs text-slate-500">Created by {ticket.createdBy}</p>
                 {ticket.escalated ? (
                   <p className="mt-2 inline-flex border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
@@ -864,12 +1084,88 @@ export default function TicketDetailsPage() {
                 <p className="mt-1 text-xs text-slate-500">
                   Files shared with this ticket.
                 </p>
+                {canEditTicketContent && isEditingTicketContent ? (
+                  <div className="mt-3 border border-dashed border-slate-300 bg-slate-50 p-3">
+                    {retainedTicketAttachments.length > 0 ? (
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        {retainedTicketAttachments.map((attachment) => {
+                          const label = getAttachmentLabel(attachment);
+                          return (
+                            <span
+                              key={`retained-${attachment}`}
+                              className="inline-flex items-center gap-1 rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                            >
+                              <span className="max-w-52 truncate">{label}</span>
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-900"
+                                onClick={() => removeRetainedTicketAttachment(attachment)}
+                                aria-label={`Remove ${label}`}
+                              >
+                                <X className="size-3" />
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <input
+                      ref={ticketAttachmentInputRef}
+                      type="file"
+                      className="hidden"
+                      multiple
+                      accept={REPLY_ATTACHMENT_ACCEPT}
+                      onChange={onTicketAttachmentChange}
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                        onClick={openTicketAttachmentPicker}
+                        disabled={isTicketContentSaving}
+                      >
+                        <Paperclip className="size-3.5" />
+                        Add attachments
+                      </button>
+                      {ticketAttachmentFiles.length > 0 ? (
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                          onClick={clearTicketAttachments}
+                          disabled={isTicketContentSaving}
+                        >
+                          Clear all
+                        </button>
+                      ) : null}
+                    </div>
+                    {ticketAttachmentFiles.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {ticketAttachmentFiles.map((file, index) => (
+                          <span
+                            key={`${file.name}-${index}`}
+                            className="inline-flex items-center gap-1 rounded-none border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                          >
+                            <span className="max-w-52 truncate">{file.name}</span>
+                            <button
+                              type="button"
+                              className="text-slate-500 hover:text-slate-900"
+                              onClick={() => removeTicketAttachment(index)}
+                              aria-label={`Remove ${file.name}`}
+                            >
+                              <X className="size-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="mt-3">
-                  {ticket.attachments.length === 0 ? (
+                  {displayedTicketAttachments.length === 0 ? (
                     <p className="text-sm text-slate-500">No attachments.</p>
                   ) : (
                     <div className="grid gap-3 sm:grid-cols-2">
-                      {ticket.attachments.map((attachment) => {
+                      {displayedTicketAttachments.map((attachment) => {
                         const label = getAttachmentLabel(attachment);
                         const isImage = isImageAttachment(attachment);
                         return (
@@ -1135,6 +1431,7 @@ export default function TicketDetailsPage() {
                         const isNewest = index === 0;
                         const showActiveChrome =
                           isNewest && isActiveTicketStatus(ticket.status);
+                        const actionLabel = getActivityActionLabel(entry.action);
                         return (
                           <li
                             key={entry.id}
@@ -1145,7 +1442,7 @@ export default function TicketDetailsPage() {
                             <div className="relative z-10 flex w-7 shrink-0 justify-center pt-1 sm:w-8">
                               <span
                                 className={`size-2.5 shrink-0 rounded-none border-2 border-white ${
-                                  showActiveChrome ? "bg-red-500" : "bg-slate-400"
+                                  getActivityDotClass(entry.action, showActiveChrome)
                                 }`}
                                 aria-hidden
                               />
@@ -1157,6 +1454,27 @@ export default function TicketDetailsPage() {
                               <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
                                 {formatInteractionTime(entry.at)}
                               </p>
+                              {actionLabel || entry.actor ? (
+                                <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
+                                  {actionLabel}
+                                  {entry.actor ? ` by ${entry.actor}` : ""}
+                                </p>
+                              ) : null}
+                              {entry.details && entry.details.length > 0 ? (
+                                <div className="mt-1 space-y-0.5">
+                                  {entry.details.map((detail, detailIndex) => (
+                                    <p
+                                      key={`${entry.id}-detail-${detail.field}-${detailIndex}`}
+                                      className="text-xs text-slate-600 sm:text-sm"
+                                    >
+                                      <span className="font-semibold text-slate-700">
+                                        {detail.label}
+                                      </span>{" "}
+                                      {detail.from} {"->"} {detail.to}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
                               <p className="mt-1 text-xs text-slate-600 sm:text-sm">
                                 <span className="font-semibold text-slate-700">Status</span>{" "}
                                 {entry.statusLabel}

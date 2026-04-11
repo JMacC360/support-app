@@ -21,6 +21,21 @@ export type Reply = {
   attachments?: string[];
 };
 
+export type TicketActivity = {
+  id: string;
+  title: string;
+  at: string;
+  statusLabel: string;
+  action?: string;
+  actor?: string;
+  details?: Array<{
+    field: string;
+    label: string;
+    from: string;
+    to: string;
+  }>;
+};
+
 export type Ticket = {
   id: string;
   subject: string;
@@ -41,6 +56,7 @@ export type Ticket = {
   escalatedToAdminAt?: string;
   escalationReason?: string;
   replies: Reply[];
+  activityLog?: TicketActivity[];
 };
 
 export type AccessLevel =

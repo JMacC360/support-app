@@ -10,8 +10,9 @@ import {
   ShieldCheck,
   User,
 } from "lucide-react";
+import { PermissionSwitch } from "@/components/permission-switch";
 import { Button } from "@/components/ui/button";
-import { fetchRoles } from "@/lib/rbac";
+import { fetchRoles, type ApiRole } from "@/lib/rbac";
 import { fetchUserById, updateUser, type UserRecord } from "@/lib/users";
 
 const steps = [
@@ -22,17 +23,6 @@ const steps = [
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
 ] as const;
 
-type PermissionKey =
-  | "viewFinancialReports"
-  | "manageSupportTickets"
-  | "globalSystemSettings";
-
-const permissionLabels: Record<PermissionKey, string> = {
-  viewFinancialReports: "Allow user to open new support tickets",
-  manageSupportTickets: "Route tickets to specific agents or teams",
-  globalSystemSettings: "Invite, suspend, or delete team members",
-};
-
 function splitFullName(name: string) {
   const trimmed = name.trim();
   if (!trimmed) return { firstName: "", lastName: "" };
@@ -42,6 +32,15 @@ function splitFullName(name: string) {
     firstName: parts[0] ?? "",
     lastName: parts.slice(1).join(" "),
   };
+}
+
+function formatPermissionLabel(permissionName: string) {
+  return permissionName
+    .split(/[._:-]/g)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function formatTimestamp(value: string | null) {
@@ -65,6 +64,7 @@ export default function UserDetailsPage() {
 
   const [user, setUser] = useState<UserRecord | null>(null);
   const [roleOptions, setRoleOptions] = useState<string[]>([]);
+  const [rolePermissionMap, setRolePermissionMap] = useState<Record<string, Set<string>>>({});
   const [activeStep, setActiveStep] = useState<(typeof steps)[number]["id"]>(
     "personal-details"
   );
@@ -77,11 +77,6 @@ export default function UserDetailsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [organizationSearch, setOrganizationSearch] = useState("");
-  const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
-    viewFinancialReports: true,
-    manageSupportTickets: true,
-    globalSystemSettings: false,
-  });
 
   useEffect(() => {
     let active = true;
@@ -114,6 +109,12 @@ export default function UserDetailsPage() {
         setRoleOptions(roleNames);
         setRole(fallbackRole);
         setIsActive(loadedUser.isActive);
+        setRolePermissionMap(
+          loadedRoles.reduce<Record<string, Set<string>>>((acc, roleEntry: ApiRole) => {
+            acc[roleEntry.name] = new Set(roleEntry.permissions.map((permission) => permission.name));
+            return acc;
+          }, {})
+        );
       } catch (error) {
         if (!active) return;
         setErrorMessage(error instanceof Error ? error.message : "Unable to load user.");
@@ -145,9 +146,14 @@ export default function UserDetailsPage() {
     [firstName, lastName]
   );
 
-  const togglePermission = (key: PermissionKey) => {
-    setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  const selectedRolePermissions = useMemo(() => rolePermissionMap[role] ?? new Set<string>(), [role, rolePermissionMap]);
+  const visiblePermissionNames = useMemo(
+    () =>
+      Array.from(selectedRolePermissions).sort((a, b) =>
+        formatPermissionLabel(a).localeCompare(formatPermissionLabel(b))
+      ),
+    [selectedRolePermissions]
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -520,34 +526,31 @@ export default function UserDetailsPage() {
                   <h3 className="text-xl font-semibold">Permissions</h3>
                 </div>
                 <div className="space-y-2">
-                  {(Object.keys(permissionLabels) as PermissionKey[]).map((key) => (
-                    <div
-                      key={key}
-                      className="flex items-center justify-between border border-slate-200 bg-slate-50 px-3 py-2.5"
-                    >
-                      <span className="text-sm text-slate-700">{permissionLabels[key]}</span>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={permissions[key]}
-                        onClick={() => togglePermission(key)}
-                        className={`relative inline-flex h-5 w-10 items-center rounded-none border transition-colors ${
-                          permissions[key]
-                            ? "border-blue-700 bg-blue-700"
-                            : "border-slate-300 bg-slate-200"
-                        }`}
+                  {visiblePermissionNames.length === 0 ? (
+                    <p className="border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+                      No enabled permissions for this role.
+                    </p>
+                  ) : (
+                    visiblePermissionNames.map((permissionName) => (
+                      <div
+                        key={permissionName}
+                        className="flex items-center justify-between border border-slate-200 bg-slate-50 px-3 py-2.5"
                       >
-                        <span
-                          className={`inline-block size-3.5 transform bg-white transition-transform ${
-                            permissions[key] ? "translate-x-5" : "translate-x-1"
-                          }`}
+                        <span className="text-sm text-slate-700">
+                          {formatPermissionLabel(permissionName)}
+                        </span>
+                        <PermissionSwitch
+                          checked
+                          onChange={() => {}}
+                          disabled
+                          keepCheckedColorWhenDisabled
                         />
-                      </button>
-                    </div>
-                  ))}
+                      </div>
+                    ))
+                  )}
                 </div>
                 <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Permissions based on selected role
+                  Showing enabled permissions for selected role
                 </p>
               </div>
             </section>

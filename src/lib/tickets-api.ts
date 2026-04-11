@@ -1,6 +1,6 @@
 import { getAccessToken } from "@/lib/auth";
 import { getApiBaseUrl } from "@/lib/api-base-url";
-import type { Reply, Ticket } from "@/lib/tickets";
+import type { Reply, Ticket, TicketActivity } from "@/lib/tickets";
 
 type ApiUser = {
   id: number;
@@ -43,6 +43,31 @@ type ApiTicketThread = {
   created_at: string;
   updated_at: string;
   user?: ApiUser;
+};
+
+type ApiActivityLog = {
+  id: number;
+  ticket_id: number | null;
+  user_id: number | null;
+  action: string;
+  subject_type: string | null;
+  subject_id: number | null;
+  description: string;
+  properties: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  user?: ApiUser | null;
+};
+
+type ApiActivityChangeItem = {
+  field?: string;
+  label?: string;
+  from?: string | null;
+  to?: string | null;
+};
+
+type ApiActivityLogsResponse = {
+  data: ApiActivityLog[];
 };
 
 type ApiUsersResponse = {
@@ -108,7 +133,8 @@ function mapApiThreadToReply(thread: ApiTicketThread): Reply {
 function mapApiTicketToTicket(
   ticket: ApiTicket,
   categoryById: Map<number, string>,
-  replies: Reply[]
+  replies: Reply[],
+  activityLog: TicketActivity[]
 ): Ticket {
   const creatorLabel = ticket.creator?.name ?? ticket.creator?.email ?? `user-${ticket.created_by}`;
   const assigneeLabel = ticket.assignee?.name ?? "Unassigned";
@@ -133,6 +159,59 @@ function mapApiTicketToTicket(
     assignedTo: assigneeLabel,
     escalated: false,
     replies,
+    activityLog,
+  };
+}
+
+function mapActionToStatusLabel(
+  action: string,
+  properties: Record<string, unknown> | null
+): string {
+  switch (action) {
+    case "ticket.created":
+      return String((properties?.status as string | undefined) ?? "Open");
+    case "ticket.status_updated":
+      return String((properties?.to as string | undefined) ?? "Status updated");
+    case "ticket.updated":
+      return "Update logged";
+    case "ticket.deleted":
+      return "Deleted";
+    case "ticket.thread_created":
+      return "Reply added";
+    case "ticket.thread_updated":
+      return "Reply updated";
+    case "ticket.thread_deleted":
+      return "Reply deleted";
+    default:
+      return "Update logged";
+  }
+}
+
+function mapApiActivityLogToTicketActivity(log: ApiActivityLog): TicketActivity {
+  const changedItemsRaw = log.properties?.changed_items;
+  const details = Array.isArray(changedItemsRaw)
+    ? (changedItemsRaw as ApiActivityChangeItem[])
+        .map((item) => {
+          const label = String(item.label ?? item.field ?? "").trim();
+          if (!label) return null;
+          return {
+            field: String(item.field ?? ""),
+            label,
+            from: String(item.from ?? ""),
+            to: String(item.to ?? ""),
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null)
+    : [];
+
+  return {
+    id: String(log.id),
+    title: log.description,
+    at: new Date(log.created_at).toLocaleString(),
+    statusLabel: mapActionToStatusLabel(log.action, log.properties),
+    action: log.action,
+    actor: log.user?.name ?? log.user?.email ?? undefined,
+    details,
   };
 }
 
@@ -264,20 +343,25 @@ export async function fetchTickets() {
 }
 
 export async function fetchTicketDetail(ticketId: string) {
-  const [ticketResponse, ticketThreadsResponse, categoriesResponse] = await Promise.all([
-    fetch(`${getApiBaseUrl()}/tickets/${ticketId}`, {
-      method: "GET",
-      headers: getJsonHeaders(),
-    }),
-    fetch(`${getApiBaseUrl()}/tickets/${ticketId}/threads`, {
-      method: "GET",
-      headers: getJsonHeaders(),
-    }),
-    fetch(`${getApiBaseUrl()}/categories`, {
-      method: "GET",
-      headers: getJsonHeaders(),
-    }),
-  ]);
+  const [ticketResponse, ticketThreadsResponse, ticketActivityLogsResponse, categoriesResponse] =
+    await Promise.all([
+      fetch(`${getApiBaseUrl()}/tickets/${ticketId}`, {
+        method: "GET",
+        headers: getJsonHeaders(),
+      }),
+      fetch(`${getApiBaseUrl()}/tickets/${ticketId}/threads`, {
+        method: "GET",
+        headers: getJsonHeaders(),
+      }),
+      fetch(`${getApiBaseUrl()}/tickets/${ticketId}/activity-logs`, {
+        method: "GET",
+        headers: getJsonHeaders(),
+      }),
+      fetch(`${getApiBaseUrl()}/categories`, {
+        method: "GET",
+        headers: getJsonHeaders(),
+      }),
+    ]);
 
   if (!ticketResponse.ok) {
     throw new Error(await parseApiError(ticketResponse, "Unable to load ticket."));
@@ -285,17 +369,29 @@ export async function fetchTicketDetail(ticketId: string) {
   if (!ticketThreadsResponse.ok) {
     throw new Error(await parseApiError(ticketThreadsResponse, "Unable to load ticket threads."));
   }
+  if (!ticketActivityLogsResponse.ok) {
+    throw new Error(
+      await parseApiError(ticketActivityLogsResponse, "Unable to load ticket activity logs.")
+    );
+  }
   if (!categoriesResponse.ok) {
     throw new Error(await parseApiError(categoriesResponse, "Unable to load categories."));
   }
 
   const apiTicket = (await ticketResponse.json()) as ApiTicket;
   const apiThreads = (await ticketThreadsResponse.json()) as ApiTicketThread[];
+  const activityLogsPayload = (await ticketActivityLogsResponse.json()) as
+    | ApiActivityLogsResponse
+    | ApiActivityLog[];
+  const apiActivityLogs = Array.isArray(activityLogsPayload)
+    ? activityLogsPayload
+    : activityLogsPayload.data ?? [];
   const categories = (await categoriesResponse.json()) as ApiCategory[];
   const categoryById = new Map(categories.map((category) => [category.id, category.name]));
   const replies = apiThreads.map(mapApiThreadToReply);
+  const activityLog = apiActivityLogs.map(mapApiActivityLogToTicketActivity);
 
-  return mapApiTicketToTicket(apiTicket, categoryById, replies);
+  return mapApiTicketToTicket(apiTicket, categoryById, replies, activityLog);
 }
 
 export async function updateTicketFields(
@@ -305,6 +401,10 @@ export async function updateTicketFields(
     priority?: string;
     categoryId?: number;
     assignedTo?: number | null;
+    subject?: string;
+    description?: string;
+    attachments?: File[];
+    existingAttachments?: string[];
   }
 ) {
   const body: Record<string, unknown> = {};
@@ -327,14 +427,38 @@ export async function updateTicketFields(
   if (payload.priority) body.priority = payload.priority;
   if (payload.categoryId) body.category_id = payload.categoryId;
   if (payload.assignedTo !== undefined) body.assigned_to = payload.assignedTo;
+  if (payload.subject !== undefined) body.subject = payload.subject;
+  if (payload.description !== undefined) body.description = payload.description;
+  if (payload.existingAttachments !== undefined) {
+    body.existing_attachments = payload.existingAttachments;
+  }
 
+  const hasAttachments = Boolean(payload.attachments?.length);
   const response = await fetch(`${getApiBaseUrl()}/tickets/${ticketId}`, {
     method: "PUT",
-    headers: {
-      ...getJsonHeaders(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+    headers: hasAttachments
+      ? getJsonHeaders()
+      : {
+          ...getJsonHeaders(),
+          "Content-Type": "application/json",
+        },
+    body: hasAttachments
+      ? (() => {
+          const formData = new FormData();
+          Object.entries(body).forEach(([key, value]) => {
+            if (value !== undefined && value !== null) {
+              formData.append(key, String(value));
+            }
+          });
+          (payload.attachments ?? []).forEach((file) => {
+            formData.append("attachments[]", file);
+          });
+          (payload.existingAttachments ?? []).forEach((attachment) => {
+            formData.append("existing_attachments[]", attachment);
+          });
+          return formData;
+        })()
+      : JSON.stringify(body),
   });
 
   if (!response.ok) {

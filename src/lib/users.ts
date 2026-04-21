@@ -1,186 +1,184 @@
+import { getAccessToken } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api-base-url";
+
 export type UserStatus = "Active" | "Inactive";
 
-export type UserRole =
-  | "Admin"
-  | "Sub-Franchisor"
-  | "Franchisee"
-  | "Retailer"
-  | "B2B Client"
-  | "Support Team Lead";
-
-export const userRoles: UserRole[] = [
-  "Admin",
-  "Sub-Franchisor",
-  "Franchisee",
-  "Retailer",
-  "B2B Client",
-  "Support Team Lead",
-];
-
-export type UserRecord = {
-  id: string;
+type ApiRole = {
+  id: number;
   name: string;
-  email: string;
-  role: UserRole;
-  status: UserStatus;
-  organizationId: string;
-  parentOrganizationId: string | null;
+  guard_name: string;
+  created_at: string | null;
 };
 
-const USERS_STORAGE_KEY = "support-ticket-app:users";
+type ApiUser = {
+  id: number;
+  name: string;
+  email: string;
+  is_active: boolean;
+  roles: ApiRole[];
+  role_names: string[];
+  created_at: string | null;
+  updated_at: string | null;
+};
 
-const ORGANIZATION_IDS = {
-  hq: "ORG-HQ",
-  subFranchisor: "ORG-SUB-001",
-  franchisee: "ORG-FRN-001",
-  retailer: "ORG-RTL-001",
-  b2bClient: "ORG-B2B-001",
-  supportOps: "ORG-OPS-001",
-} as const;
+type ResourceListResponse<T> = {
+  data: T[];
+};
+
+type ResourceResponse<T> = {
+  data: T;
+};
+
+type ApiErrorResponse = {
+  message?: string;
+  errors?: Record<string, string[]>;
+};
+
+export type UserRecord = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  roleNames: string[];
+  status: UserStatus;
+  isActive: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
 
 export const userStatusPillClass: Record<UserStatus, string> = {
   Active: "bg-emerald-100 text-emerald-800",
   Inactive: "bg-slate-200 text-slate-700",
 };
 
-const initialUsers: UserRecord[] = [
-  {
-    id: "USR-0001",
-    name: "Demo Admin",
-    email: "admin@esarisari.net",
-    role: "Admin",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.hq,
-    parentOrganizationId: null,
-  },
-  {
-    id: "USR-0002",
-    name: "Sub-Franchisor Demo",
-    email: "subfranchisor@esarisari.net",
-    role: "Sub-Franchisor",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.subFranchisor,
-    parentOrganizationId: ORGANIZATION_IDS.hq,
-  },
-  {
-    id: "USR-0003",
-    name: "Franchisee Demo",
-    email: "franchisee@esarisari.net",
-    role: "Franchisee",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.franchisee,
-    parentOrganizationId: ORGANIZATION_IDS.subFranchisor,
-  },
-  {
-    id: "USR-0004",
-    name: "Retailer Demo",
-    email: "retailer@esarisari.net",
-    role: "Retailer",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.retailer,
-    parentOrganizationId: ORGANIZATION_IDS.franchisee,
-  },
-  {
-    id: "USR-0005",
-    name: "B2B Client Demo",
-    email: "b2b@esarisari.net",
-    role: "B2B Client",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.b2bClient,
-    parentOrganizationId: ORGANIZATION_IDS.franchisee,
-  },
-  {
-    id: "USR-0006",
-    name: "Support Team Lead Demo",
-    email: "supportlead@esarisari.net",
-    role: "Support Team Lead",
-    status: "Active",
-    organizationId: ORGANIZATION_IDS.supportOps,
-    parentOrganizationId: ORGANIZATION_IDS.hq,
-  },
-];
-
-function defaultOrganizationForRole(role: UserRole) {
-  switch (role) {
-    case "Admin":
-      return { organizationId: ORGANIZATION_IDS.hq, parentOrganizationId: null };
-    case "Sub-Franchisor":
-      return {
-        organizationId: ORGANIZATION_IDS.subFranchisor,
-        parentOrganizationId: ORGANIZATION_IDS.hq,
-      };
-    case "Franchisee":
-      return {
-        organizationId: ORGANIZATION_IDS.franchisee,
-        parentOrganizationId: ORGANIZATION_IDS.subFranchisor,
-      };
-    case "Retailer":
-      return {
-        organizationId: ORGANIZATION_IDS.retailer,
-        parentOrganizationId: ORGANIZATION_IDS.franchisee,
-      };
-    case "B2B Client":
-      return {
-        organizationId: ORGANIZATION_IDS.b2bClient,
-        parentOrganizationId: ORGANIZATION_IDS.franchisee,
-      };
-    case "Support Team Lead":
-      return {
-        organizationId: ORGANIZATION_IDS.supportOps,
-        parentOrganizationId: ORGANIZATION_IDS.hq,
-      };
+function getJsonHeaders() {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error("You must be signed in to manage users.");
   }
-}
 
-export function newUserId(nextNumber: number) {
-  return `USR-${String(nextNumber).padStart(4, "0")}`;
-}
-
-export function loadUsers(): UserRecord[] {
-  if (typeof window === "undefined") return initialUsers;
-  const raw = window.localStorage.getItem(USERS_STORAGE_KEY);
-  if (!raw) return initialUsers;
-  try {
-    const parsed = JSON.parse(raw) as UserRecord[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return initialUsers;
-    const normalizedParsed = parsed.map((user) => {
-      if (user.organizationId && user.parentOrganizationId !== undefined) return user;
-      const fallbackOrg = defaultOrganizationForRole(user.role);
-      return {
-        ...user,
-        organizationId: user.organizationId ?? fallbackOrg.organizationId,
-        parentOrganizationId: user.parentOrganizationId ?? fallbackOrg.parentOrganizationId,
-      };
-    });
-    const byId = new Map(normalizedParsed.map((u) => [u.id, u]));
-    for (const seed of initialUsers) {
-      if (!byId.has(seed.id)) byId.set(seed.id, seed);
-    }
-    return Array.from(byId.values());
-  } catch {
-    return initialUsers;
-  }
-}
-
-export function saveUsers(users: UserRecord[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-}
-
-export function addUser(
-  input: Omit<UserRecord, "id" | "organizationId" | "parentOrganizationId"> &
-    Partial<Pick<UserRecord, "organizationId" | "parentOrganizationId">>
-): UserRecord {
-  const existing = loadUsers();
-  const nextNumber = existing.length + 1;
-  const fallbackOrg = defaultOrganizationForRole(input.role);
-  const user: UserRecord = {
-    ...input,
-    organizationId: input.organizationId ?? fallbackOrg.organizationId,
-    parentOrganizationId: input.parentOrganizationId ?? fallbackOrg.parentOrganizationId,
-    id: newUserId(nextNumber),
+  return {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${accessToken}`,
   };
-  const next = [user, ...existing];
-  saveUsers(next);
-  return user;
+}
+
+function toUserRecord(user: ApiUser): UserRecord {
+  const roleNames = user.role_names ?? user.roles.map((role) => role.name);
+  const primaryRole = roleNames[0] ?? "Unassigned";
+
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: primaryRole,
+    roleNames,
+    status: user.is_active ? "Active" : "Inactive",
+    isActive: user.is_active,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at,
+  };
+}
+
+async function parseApiError(response: Response, fallback: string) {
+  const payload = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+  if (payload?.errors) {
+    const firstError = Object.values(payload.errors).flat()[0];
+    if (firstError) return firstError;
+  }
+  if (payload?.message) return payload.message;
+  return fallback;
+}
+
+export async function fetchUsers() {
+  const response = await fetch(`${getApiBaseUrl()}/users`, {
+    method: "GET",
+    headers: getJsonHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to load users."));
+  }
+
+  const payload = (await response.json()) as ResourceListResponse<ApiUser>;
+  return payload.data.map(toUserRecord);
+}
+
+export async function fetchUserById(userId: number) {
+  const response = await fetch(`${getApiBaseUrl()}/users/${userId}`, {
+    method: "GET",
+    headers: getJsonHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to load user details."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
+}
+
+export async function createUser(input: {
+  name: string;
+  email: string;
+  password: string;
+  password_confirmation: string;
+  roles?: string[];
+  is_active?: boolean;
+}) {
+  const response = await fetch(`${getApiBaseUrl()}/users`, {
+    method: "POST",
+    headers: getJsonHeaders(),
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to create user."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
+}
+
+export async function updateUserStatus(userId: number, isActive: boolean) {
+  const response = await fetch(`${getApiBaseUrl()}/users/${userId}/status`, {
+    method: "PATCH",
+    headers: getJsonHeaders(),
+    body: JSON.stringify({
+      is_active: isActive,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to update user status."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
+}
+
+export async function updateUser(
+  userId: number,
+  input: {
+    name: string;
+    email: string;
+    password?: string;
+    password_confirmation?: string;
+    roles?: string[];
+    is_active?: boolean;
+  }
+) {
+  const response = await fetch(`${getApiBaseUrl()}/users/${userId}`, {
+    method: "PUT",
+    headers: getJsonHeaders(),
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Unable to update user."));
+  }
+
+  const payload = (await response.json()) as ResourceResponse<ApiUser>;
+  return toUserRecord(payload.data);
 }

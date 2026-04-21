@@ -6,8 +6,13 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  fetchAuthenticatedUser,
+  getAccessToken,
+  loadAuthSession,
+  logoutFromBackend,
+} from "@/lib/auth";
+import {
   canAccessWorkspacePath,
-  clearCurrentUser,
   isDemoAdmin,
   loadCurrentUser,
 } from "@/lib/tickets";
@@ -25,11 +30,29 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setCurrentUser(loadCurrentUser());
+    let active = true;
+
+    const bootstrapAuth = async () => {
+      const session = loadAuthSession();
+      if (!session || !getAccessToken()) {
+        if (!active) return;
+        setCurrentUser(null);
+        setReady(true);
+        return;
+      }
+
+      const hydratedUser = await fetchAuthenticatedUser();
+      if (!active) return;
+
+      setCurrentUser(hydratedUser?.email ?? loadCurrentUser());
       setReady(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    };
+
+    void bootstrapAuth();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -116,8 +139,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <Button
               variant="outline"
               className="border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              onClick={() => {
-                clearCurrentUser();
+              onClick={async () => {
+                await logoutFromBackend();
                 setCurrentUser(null);
                 router.push("/login");
               }}

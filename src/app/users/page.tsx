@@ -6,12 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { Button } from "@/components/ui/button";
 import {
-  loadUsers,
-  saveUsers,
-  userRoles,
+  fetchUsers,
   userStatusPillClass,
+  updateUserStatus,
   type UserRecord,
-  type UserRole,
   type UserStatus,
 } from "@/lib/users";
 
@@ -52,19 +50,37 @@ export default function UsersPage() {
   const router = useRouter();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [isStatusUpdating, setIsStatusUpdating] = useState<Record<number, boolean>>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [roleFilter, setRoleFilter] = useState<"All" | UserRole>("All");
+  const [roleFilter, setRoleFilter] = useState<"All" | string>("All");
   const [statusFilter, setStatusFilter] = useState<"All" | UserStatus>("All");
-  const [sortKey, setSortKey] = useState<UserSortKey>("name");
+  const [sortKey] = useState<UserSortKey>("name");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setUsers(loadUsers());
-      setIsHydrated(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    let active = true;
+
+    const load = async () => {
+      setErrorMessage(null);
+      try {
+        const loadedUsers = await fetchUsers();
+        if (!active) return;
+        setUsers(loadedUsers);
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load users.");
+      } finally {
+        if (!active) return;
+        setIsHydrated(true);
+      }
+    };
+
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const filteredUsers = useMemo(() => {
@@ -76,7 +92,7 @@ export default function UsersPage() {
         q.length === 0 ||
         user.name.toLowerCase().includes(q) ||
         user.email.toLowerCase().includes(q) ||
-        user.id.toLowerCase().includes(q) ||
+        String(user.id).toLowerCase().includes(q) ||
         user.role.toLowerCase().includes(q);
       return matchesRole && matchesStatus && matchesSearch;
     });
@@ -122,30 +138,42 @@ export default function UsersPage() {
     [effectivePage, totalPages]
   );
 
-  const leftRoleViews = useMemo(
-    () => [
+  const leftRoleViews = useMemo(() => {
+    const roleNames = Array.from(new Set(users.map((user) => user.role))).sort((a, b) =>
+      a.localeCompare(b)
+    );
+
+    return [
       {
-        key: "All" as "All" | UserRole,
+        key: "All" as "All" | string,
         label: "All",
         count: users.length,
       },
-      ...userRoles.map((role) => ({
-        key: role as "All" | UserRole,
-        label: role,
-        count: users.filter((u) => u.role === role).length,
+      ...roleNames.map((roleName) => ({
+        key: roleName,
+        label: roleName,
+        count: users.filter((user) => user.role === roleName).length,
       })),
-    ],
-    [users]
-  );
+    ];
+  }, [users]);
 
-  const toggleStatus = (id: string) => {
-    const next = users.map((u) => {
-      if (u.id !== id) return u;
-      const status: UserStatus = u.status === "Active" ? "Inactive" : "Active";
-      return { ...u, status };
-    });
-    setUsers(next);
-    saveUsers(next);
+  const toggleStatus = async (user: UserRecord) => {
+    const nextIsActive = !user.isActive;
+    setIsStatusUpdating((prev) => ({ ...prev, [user.id]: true }));
+    setErrorMessage(null);
+
+    try {
+      const updatedUser = await updateUserStatus(user.id, nextIsActive);
+      setUsers((prev) =>
+        prev.map((currentUser) => (currentUser.id === updatedUser.id ? updatedUser : currentUser))
+      );
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Unable to update user status."
+      );
+    } finally {
+      setIsStatusUpdating((prev) => ({ ...prev, [user.id]: false }));
+    }
   };
 
   if (!isHydrated) {
@@ -177,6 +205,11 @@ export default function UsersPage() {
               </div>
             </div>
           </header>
+          {errorMessage ? (
+            <div className="border border-rose-200 bg-rose-50 px-4 py-3">
+              <p className="text-sm text-rose-700">{errorMessage}</p>
+            </div>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
             <aside className="border border-slate-200 bg-white p-3 lg:sticky lg:top-6 lg:h-fit">
@@ -284,16 +317,32 @@ export default function UsersPage() {
                                 {user.status}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="border-slate-300"
-                                onClick={() => toggleStatus(user.id)}
-                              >
-                                {user.status === "Active" ? "Deactivate" : "Activate"}
-                              </Button>
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-slate-300"
+                                  onClick={() => router.push(`/users/${user.id}`)}
+                                >
+                                  View / Edit
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-slate-300"
+                                  onClick={() => void toggleStatus(user)}
+                                  disabled={Boolean(isStatusUpdating[user.id])}
+                                >
+                                  {isStatusUpdating[user.id]
+                                    ? "Updating..."
+                                    : user.status === "Active"
+                                      ? "Deactivate"
+                                      : "Activate"}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

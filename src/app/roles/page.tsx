@@ -1,195 +1,187 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ComponentType, useMemo, useState } from "react";
-import { Building2, Plus, Ticket } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Shield } from "lucide-react";
 import { PermissionSwitch } from "@/components/permission-switch";
 import { Button } from "@/components/ui/button";
-import type { PermissionId } from "@/lib/roles-permissions-matrix";
-
-type RoleItem = {
-  id: string;
-  label: string;
-  description: string;
-};
-
-type PermissionRow = {
-  id: PermissionId;
-  title: string;
-  description: string;
-  disabled?: boolean;
-};
-
-type PermissionGroup = {
-  id: string;
-  title: string;
-  icon: ComponentType<{ className?: string }>;
-  rows: PermissionRow[];
-};
-
-const roles: RoleItem[] = [
-  {
-    id: "admin",
-    label: "Admin",
-    description: "Full system access and policy management.",
-  },
-  {
-    id: "l1-support",
-    label: "L1 Support",
-    description: "Level 1 support.",
-  },
-  {
-    id: "l2-support",
-    label: "L2 Support",
-    description: "Level 2 support.",
-  },
-  {
-    id: "sub-franchisor",
-    label: "Sub-Franchisor",
-    description: "Regional oversight and performance tracking.",
-  },
-  {
-    id: "franchisee",
-    label: "Franchisee",
-    description: "Store-level support and customer resolution.",
-  },
-  {
-    id: "retailer",
-    label: "Retailer",
-    description: "Basic ticket management for outlets.",
-  },
-  {
-    id: "b2b",
-    label: "B2B",
-    description: "Corporate client support portal access.",
-  },
-  {
-    id: "support",
-    label: "Support",
-    description: "Frontline desk and query handling.",
-  },
-];
-
-const permissionGroups: PermissionGroup[] = [
-  {
-    id: "ticket-operations",
-    title: "Ticket Operations",
-    icon: Ticket,
-    rows: [
-      {
-        id: "ticketCreation",
-        title: "Ticket Creation",
-        description: "Allow user to open new support tickets",
-      },
-      {
-        id: "ticketAssignment",
-        title: "Ticket Assignment",
-        description: "Route tickets to specific agents or teams",
-      },
-    ],
-  },
-  {
-    id: "system-organization",
-    title: "System & Organization",
-    icon: Building2,
-    rows: [
-      {
-        id: "manageUsers",
-        title: "Manage Users",
-        description: "Create users, update user info, and activate or deactivate accounts",
-      },
-    ],
-  },
-];
-
-const defaultPermissionsByRole: Record<string, Record<PermissionId, boolean>> = {
-  admin: {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: true,
-    configureSettings: true,
-    viewAnalytics: true,
-    exportFinancialData: false,
-  },
-  "l1-support": {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: false,
-    exportFinancialData: false,
-  },
-  "l2-support": {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: true,
-    exportFinancialData: false,
-  },
-  "sub-franchisor": {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: true,
-    exportFinancialData: false,
-  },
-  franchisee: {
-    ticketCreation: true,
-    ticketAssignment: false,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: false,
-    exportFinancialData: false,
-  },
-  retailer: {
-    ticketCreation: true,
-    ticketAssignment: false,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: false,
-    exportFinancialData: false,
-  },
-  b2b: {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: true,
-    exportFinancialData: false,
-  },
-  support: {
-    ticketCreation: true,
-    ticketAssignment: true,
-    manageUsers: false,
-    configureSettings: false,
-    viewAnalytics: false,
-    exportFinancialData: false,
-  },
-};
+import {
+  fetchPermissions,
+  fetchRoles,
+  updateRole,
+  type ApiPermission,
+  type ApiRole,
+} from "@/lib/rbac";
 
 export default function RolesConfigurationPage() {
   const router = useRouter();
-  const [selectedRoleId, setSelectedRoleId] = useState<string>("admin");
-  const [permissionsByRole, setPermissionsByRole] = useState(defaultPermissionsByRole);
+  const [roles, setRoles] = useState<ApiRole[]>([]);
+  const [permissions, setPermissions] = useState<ApiPermission[]>([]);
+  const [selectedRoleId, setSelectedRoleId] = useState<number | null>(null);
+  const [selectedPermissionNames, setSelectedPermissionNames] = useState<Set<string>>(new Set());
+  const [savedPermissionNames, setSavedPermissionNames] = useState<Set<string>>(new Set());
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    const bootstrap = async () => {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const [loadedRoles, loadedPermissions] = await Promise.all([
+          fetchRoles(),
+          fetchPermissions(),
+        ]);
+
+        if (!active) return;
+
+        setRoles(loadedRoles);
+        setPermissions(loadedPermissions);
+
+        const initialRole = loadedRoles[0] ?? null;
+        setSelectedRoleId(initialRole?.id ?? null);
+
+        const initialPermissionNames = new Set(
+          initialRole?.permissions.map((permission) => permission.name) ?? []
+        );
+        setSelectedPermissionNames(initialPermissionNames);
+        setSavedPermissionNames(new Set(initialPermissionNames));
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load roles.");
+      } finally {
+        if (!active) return;
+        setIsLoading(false);
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const selectedRole = useMemo(
-    () => roles.find((role) => role.id === selectedRoleId) ?? roles[0],
-    [selectedRoleId]
+    () => roles.find((role) => role.id === selectedRoleId) ?? null,
+    [roles, selectedRoleId]
   );
 
-  const currentPermissions = permissionsByRole[selectedRoleId] ?? defaultPermissionsByRole.admin;
+  const groupedPermissions = useMemo(() => {
+    const grouped = new Map<string, ApiPermission[]>();
+    for (const permission of permissions) {
+      const [scope = "general"] = permission.name.split(".");
+      if (!grouped.has(scope)) grouped.set(scope, []);
+      grouped.get(scope)?.push(permission);
+    }
 
-  const togglePermission = (permissionId: PermissionId) => {
-    setPermissionsByRole((prev) => ({
-      ...prev,
-      [selectedRoleId]: {
-        ...prev[selectedRoleId],
-        [permissionId]: !prev[selectedRoleId]?.[permissionId],
-      },
+    return Array.from(grouped.entries()).map(([scope, scopedPermissions]) => ({
+      scope,
+      permissions: [...scopedPermissions].sort((a, b) => a.name.localeCompare(b.name)),
     }));
+  }, [permissions]);
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (selectedPermissionNames.size !== savedPermissionNames.size) return true;
+    for (const permissionName of selectedPermissionNames) {
+      if (!savedPermissionNames.has(permissionName)) return true;
+    }
+    return false;
+  }, [savedPermissionNames, selectedPermissionNames]);
+
+  const handleSelectRole = (roleId: number) => {
+    const role = roles.find((item) => item.id === roleId);
+    if (!role) return;
+
+    const nextPermissionNames = new Set(role.permissions.map((permission) => permission.name));
+    setSelectedRoleId(roleId);
+    setSelectedPermissionNames(nextPermissionNames);
+    setSavedPermissionNames(new Set(nextPermissionNames));
+    setErrorMessage(null);
   };
+
+  const togglePermission = (permissionName: string) => {
+    setSelectedPermissionNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(permissionName)) {
+        next.delete(permissionName);
+      } else {
+        next.add(permissionName);
+      }
+      return next;
+    });
+  };
+
+  const discardChanges = () => {
+    setSelectedPermissionNames(new Set(savedPermissionNames));
+  };
+
+  const handleSaveChanges = async () => {
+    if (!selectedRole) return;
+
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    try {
+      const updatedRole = await updateRole(selectedRole.id, {
+        name: selectedRole.name,
+        guard_name: selectedRole.guard_name,
+        permissions: Array.from(selectedPermissionNames),
+      });
+
+      setRoles((prev) =>
+        prev.map((role) => (role.id === updatedRole.id ? updatedRole : role))
+      );
+
+      const syncedPermissionNames = new Set(
+        updatedRole.permissions.map((permission) => permission.name)
+      );
+      setSelectedPermissionNames(syncedPermissionNames);
+      setSavedPermissionNames(new Set(syncedPermissionNames));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to save role changes.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <section className="p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1400px] border border-slate-200 bg-white p-6">
+          <p className="text-sm text-slate-500">Loading roles and permissions...</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (errorMessage && roles.length === 0) {
+    return (
+      <section className="p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1400px] border border-rose-200 bg-rose-50 p-6">
+          <p className="text-sm text-rose-700">{errorMessage}</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!selectedRole) {
+    return (
+      <section className="p-4 lg:p-6">
+        <div className="mx-auto w-full max-w-[1400px] border border-slate-200 bg-white p-6">
+          <p className="text-sm text-slate-500">No roles found. Create one to get started.</p>
+          <div className="mt-4">
+            <Button type="button" onClick={() => router.push("/roles/new")}>
+              Create New Role
+            </Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="p-4 lg:p-6">
@@ -200,16 +192,25 @@ export default function RolesConfigurationPage() {
               Role Configuration
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
-              Define the scope of authority across your support ecosystem with
-              granular permission control.
+              Manage backend roles and assign permissions from your API.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button type="button" className="text-sm font-semibold" onClick={() => router.push("/roles/new")}>
+            <Button
+              type="button"
+              className="text-sm font-semibold"
+              onClick={() => router.push("/roles/new")}
+            >
               Create New Role
             </Button>
           </div>
         </header>
+
+        {errorMessage ? (
+          <div className="mb-4 border border-rose-200 bg-rose-50 px-4 py-3">
+            <p className="text-sm text-rose-700">{errorMessage}</p>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-6 lg:grid-cols-[300px_1fr]">
           <aside>
@@ -220,9 +221,10 @@ export default function RolesConfigurationPage() {
               {roles.map((role) => {
                 const active = selectedRoleId === role.id;
                 return (
-                  <label
+                  <button
                     key={role.id}
-                    htmlFor={`available-role-${role.id}`}
+                    type="button"
+                    onClick={() => handleSelectRole(role.id)}
                     className={`flex w-full cursor-pointer items-start justify-between border bg-white px-4 py-4 text-left transition-colors ${
                       active
                         ? "border-slate-300 border-l-[4px] border-l-primary"
@@ -230,21 +232,10 @@ export default function RolesConfigurationPage() {
                     }`}
                   >
                     <div className="min-w-0 flex-1 pr-2">
-                      <p className="text-lg font-semibold text-slate-900">{role.label}</p>
-                      <p className="mt-1 text-sm text-slate-600">{role.description}</p>
+                      <p className="text-lg font-semibold text-slate-900">{role.name}</p>
+                      <p className="mt-1 text-sm text-slate-600">{`Permissions: ${role.permissions.length}`}</p>
                     </div>
-                    <input
-                      id={`available-role-${role.id}`}
-                      type="checkbox"
-                      checked={active}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedRoleId(role.id);
-                        }
-                      }}
-                      className="mt-0.5 size-4 shrink-0 rounded-none border-slate-300 accent-primary"
-                    />
-                  </label>
+                  </button>
                 );
               })}
             </div>
@@ -258,62 +249,61 @@ export default function RolesConfigurationPage() {
                 </h3>
                 <p className="text-sm text-slate-600">
                   Editing capabilities for{" "}
-                  <span className="font-semibold text-secondary">{selectedRole.label}</span>{" "}
-                  role
+                  <span className="font-semibold text-secondary">{selectedRole.name}</span> role
                 </p>
+                <p className="mt-1 text-xs text-slate-500">{`Guard: ${selectedRole.guard_name}`}</p>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" className="min-w-40">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-w-40"
+                  onClick={discardChanges}
+                  disabled={!hasUnsavedChanges || isSaving}
+                >
                   Discard Changes
                 </Button>
-                <Button type="button" className="min-w-40">
-                  Save Changes
+                <Button
+                  type="button"
+                  className="min-w-40"
+                  onClick={() => void handleSaveChanges()}
+                  disabled={!hasUnsavedChanges || isSaving}
+                >
+                  {isSaving ? "Saving..." : "Save Changes"}
                 </Button>
               </div>
             </header>
 
             <div className="mt-3 space-y-3">
-              {permissionGroups.map((group) => {
-                const Icon = group.icon;
-                return (
-                  <section key={group.id} className="border-b border-slate-200 pb-4 last:border-b-0">
-                    <div className="mb-3 flex items-center gap-2">
-                      <Icon className="size-4 text-secondary" />
-                      <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
-                        {group.title}
-                      </h4>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {group.rows.map((item) => (
-                        <div
-                          key={item.id}
-                          className={`flex items-start justify-between gap-4 border px-3 py-3 ${
-                            item.disabled
-                              ? "border-slate-200 bg-slate-50"
-                              : "border-transparent bg-white"
-                          }`}
-                        >
-                          <div>
-                            <p
-                              className={`text-lg font-semibold ${
-                                item.disabled ? "text-slate-500" : "text-slate-900"
-                              }`}
-                            >
-                              {item.title}
-                            </p>
-                            <p className="mt-0.5 text-sm text-slate-600">{item.description}</p>
-                          </div>
-                          <PermissionSwitch
-                            checked={currentPermissions[item.id] ?? false}
-                            disabled={item.disabled}
-                            onChange={() => togglePermission(item.id)}
-                          />
+              {groupedPermissions.map((group) => (
+                <section key={group.scope} className="border-b border-slate-200 pb-4 last:border-b-0">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Shield className="size-4 text-secondary" />
+                    <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
+                      {group.scope}
+                    </h4>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {group.permissions.map((permission) => (
+                      <div
+                        key={permission.id}
+                        className="flex items-start justify-between gap-4 border-transparent bg-white px-3 py-3"
+                      >
+                        <div>
+                          <p className="text-lg font-semibold text-slate-900">{permission.name}</p>
+                          <p className="mt-0.5 text-sm text-slate-600">
+                            Guard: {permission.guard_name}
+                          </p>
                         </div>
-                      ))}
-                    </div>
-                  </section>
-                );
-              })}
+                        <PermissionSwitch
+                          checked={selectedPermissionNames.has(permission.name)}
+                          onChange={() => togglePermission(permission.name)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
 
             <div className="mt-5 border border-dashed border-slate-300 bg-slate-50 p-4">
@@ -321,7 +311,7 @@ export default function RolesConfigurationPage() {
                 <div className="flex size-9 shrink-0 items-center justify-center bg-slate-200 text-secondary">
                   i
                 </div>
-                <p className="text-sm text-slate-700 py-2">
+                <p className="py-2 text-sm text-slate-700">
                   <span className="font-semibold">Pro Tip:</span> Changing permissions for a role
                   will instantly affect all users currently assigned to that role.
                 </p>

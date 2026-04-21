@@ -6,12 +6,12 @@ import { useEffect, useMemo, useState } from "react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketTableStatus } from "@/components/ticket-table-status";
 import { Button } from "@/components/ui/button";
+import { fetchTickets } from "@/lib/tickets-api";
 import {
   canCreateTickets,
   categories,
   getVisibleTicketsForUser,
   loadCurrentUser,
-  loadTickets,
   priorities,
   priorityPillClass,
   statuses,
@@ -58,6 +58,7 @@ export default function TicketsPage() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<"All" | TicketStatus>("All");
   const [categoryFilter, setCategoryFilter] = useState<"All" | TicketCategory>("All");
@@ -67,12 +68,27 @@ export default function TicketsPage() {
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
+    let active = true;
+
+    const load = async () => {
       setCurrentUser(loadCurrentUser());
-      setTickets(loadTickets());
-      setIsHydrated(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
+      try {
+        const loadedTickets = await fetchTickets();
+        if (!active) return;
+        setTickets(loadedTickets);
+      } catch (error) {
+        if (!active) return;
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load tickets.");
+      } finally {
+        if (!active) return;
+        setIsHydrated(true);
+      }
+    };
+
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const visibleTickets = useMemo(
@@ -182,6 +198,11 @@ export default function TicketsPage() {
               </div>
             </div>
           </header>
+          {errorMessage ? (
+            <div className="border border-rose-200 bg-rose-50 px-4 py-3">
+              <p className="text-sm text-rose-700">{errorMessage}</p>
+            </div>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
             <aside className="border border-slate-200 bg-white p-3 lg:sticky lg:top-6 lg:h-fit">

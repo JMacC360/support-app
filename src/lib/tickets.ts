@@ -1,12 +1,15 @@
-export type TicketPriority = "Low" | "Medium" | "High";
+import {
+  clearAuthSession,
+  getAuthenticatedUserEmail,
+  isAuthenticatedAdminForEmail,
+  loadAuthSession,
+  saveAuthSession,
+} from "@/lib/auth";
+
+export type TicketPriority = string;
 export type TicketStatus = "Open" | "In Progress" | "Pending" | "Resolved" | "Closed";
-export type TicketCategory =
-  | "Technical"
-  | "Billing"
-  | "Access"
-  | "Account"
-  | "General";
-export type Role = "L1 Support" | "L2 Support" | "Billing Team" | "Product Specialist";
+export type TicketCategory = string;
+export type Role = string;
 
 export type Reply = {
   id: string;
@@ -15,6 +18,22 @@ export type Reply = {
   author: string;
   message: string;
   createdAt: string;
+  attachments?: string[];
+};
+
+export type TicketActivity = {
+  id: string;
+  title: string;
+  at: string;
+  statusLabel: string;
+  action?: string;
+  actor?: string;
+  details?: Array<{
+    field: string;
+    label: string;
+    from: string;
+    to: string;
+  }>;
 };
 
 export type Ticket = {
@@ -31,11 +50,13 @@ export type Ticket = {
   ownerOrgId: string;
   organizationId: string;
   parentOrganizationId: string | null;
+  companyName?: string;
   assignedTo: Role;
   escalated: boolean;
   escalatedToAdminAt?: string;
   escalationReason?: string;
   replies: Reply[];
+  activityLog?: TicketActivity[];
 };
 
 export type AccessLevel =
@@ -124,7 +145,6 @@ export const priorityTintedBorderClass: Record<TicketPriority, string> = {
 };
 
 const TICKETS_STORAGE_KEY = "support-ticket-app:tickets";
-const USER_STORAGE_KEY = "support-ticket-app:user";
 const DEMO_ADMIN_EMAIL = "admin@esarisari.net";
 const DEMO_ADMIN_PASSWORD = "password123";
 const ORG_HIERARCHY: Record<string, string | null> = {
@@ -662,18 +682,26 @@ export function saveTickets(tickets: Ticket[]) {
 }
 
 export function loadCurrentUser() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(USER_STORAGE_KEY);
+  return getAuthenticatedUserEmail();
 }
 
 export function saveCurrentUser(user: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(USER_STORAGE_KEY, normalizeUserEmail(user));
+  const normalizedEmail = normalizeUserEmail(user);
+  const existingSession = loadAuthSession();
+
+  saveAuthSession({
+    accessToken: existingSession?.accessToken ?? "",
+    roleNames: existingSession?.roleNames ?? [],
+    user: {
+      id: existingSession?.user.id ?? 0,
+      name: existingSession?.user.name ?? normalizedEmail,
+      email: normalizedEmail,
+    },
+  });
 }
 
 export function clearCurrentUser() {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(USER_STORAGE_KEY);
+  clearAuthSession();
 }
 
 export function normalizeUserEmail(email: string) {
@@ -682,6 +710,7 @@ export function normalizeUserEmail(email: string) {
 
 export function isDemoAdmin(userEmail: string | null | undefined) {
   if (!userEmail) return false;
+  if (isAuthenticatedAdminForEmail(userEmail)) return true;
   return normalizeUserEmail(userEmail) === DEMO_ADMIN_EMAIL;
 }
 
@@ -711,12 +740,37 @@ export function isValidDemoCredentials(email: string, password: string) {
 export function getUserAccessLevel(
   userEmail: string | null | undefined
 ): AccessLevel | null {
-  return getDemoAccountByEmail(userEmail)?.accessLevel ?? null;
+  const demoAccessLevel = getDemoAccountByEmail(userEmail)?.accessLevel ?? null;
+  if (demoAccessLevel) return demoAccessLevel;
+
+  if (isAuthenticatedAdminForEmail(userEmail)) {
+    return "Admin";
+  }
+
+  return null;
 }
 
 export function getCurrentUserContext(userEmail: string | null | undefined) {
   const account = getDemoAccountByEmail(userEmail);
-  if (!account) return null;
+  if (!account) {
+    const session = loadAuthSession();
+    if (
+      session &&
+      userEmail &&
+      normalizeUserEmail(session.user.email) === normalizeUserEmail(userEmail) &&
+      isAuthenticatedAdminForEmail(userEmail)
+    ) {
+      return {
+        userId: `API-${session.user.id}`,
+        organizationId: "ORG-HQ",
+        parentOrganizationId: null,
+        accessLevel: "Admin" as AccessLevel,
+        email: normalizeUserEmail(session.user.email),
+        displayName: session.user.name,
+      };
+    }
+    return null;
+  }
   return {
     userId: account.userId,
     organizationId: account.organizationId,
@@ -728,8 +782,7 @@ export function getCurrentUserContext(userEmail: string | null | undefined) {
 }
 
 export function canCreateTickets(userEmail: string | null | undefined) {
-  const accessLevel = getUserAccessLevel(userEmail);
-  return accessLevel !== null;
+  return Boolean(userEmail);
 }
 
 export function canAssignTickets(userEmail: string | null | undefined) {
@@ -752,6 +805,7 @@ export function canViewTicket(
   ticket: Ticket
 ) {
   const user = getCurrentUserContext(userEmail);
+  if (!user && userEmail) return true;
   if (!user) return false;
   if (user.accessLevel === "Admin" || user.accessLevel === "Support Team Lead") return true;
   if (user.accessLevel === "Retailer" || user.accessLevel === "B2B Client") {
@@ -791,7 +845,7 @@ export function canAccessWorkspacePath(
   pathname: string
 ) {
   const accessLevel = getUserAccessLevel(userEmail);
-  if (!accessLevel) return false;
+  if (!accessLevel) return pathname.startsWith("/tickets");
   if (pathname.startsWith("/tickets")) return true;
   if (pathname.startsWith("/users") || pathname.startsWith("/roles")) {
     return accessLevel === "Admin";

@@ -339,7 +339,7 @@ export async function fetchTickets() {
   const categories = (await categoriesResponse.json()) as ApiCategory[];
   const categoryById = new Map(categories.map((category) => [category.id, category.name]));
 
-  return ticketsPayload.data.map((ticket) => mapApiTicketToTicket(ticket, categoryById, []));
+  return ticketsPayload.data.map((ticket) => mapApiTicketToTicket(ticket, categoryById, [], []));
 }
 
 export async function fetchTicketDetail(ticketId: string) {

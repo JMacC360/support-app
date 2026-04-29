@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Paperclip, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeft, CornerUpLeft, Paperclip, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketPriorityDropdown } from "@/components/ticket-priority-dropdown";
 import { TicketStatusDropdown } from "@/components/ticket-status-dropdown";
@@ -33,7 +33,13 @@ import {
   type TicketCategory,
   type TicketStatus,
 } from "@/lib/tickets";
-import { loadAuthSession } from "@/lib/auth";
+import {
+  getAuthenticatedPermissionNames,
+  AUTH_SESSION_UPDATED_EVENT,
+  fetchAuthenticatedUser,
+  hasAuthenticatedPermission,
+  loadAuthSession,
+} from "@/lib/auth";
 
 function formatRequesterName(createdBy: string) {
   const base = createdBy.includes("@") ? createdBy.split("@")[0] : createdBy;
@@ -58,7 +64,16 @@ function getAttachmentLabel(source: string): string {
   }
 }
 
-const IMAGE_ATTACHMENT_EXTENSIONS = new Set(["jpeg", "jpg", "png", "gif", "bmp", "svg", "webp"]);
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set([
+  "jpeg",
+  "jpg",
+  "png",
+  "gif",
+  "bmp",
+  "svg",
+  "webp",
+  "avif",
+]);
 
 function isImageAttachment(source: string): boolean {
   const label = getAttachmentLabel(source).toLowerCase();
@@ -74,16 +89,37 @@ const ALLOWED_REPLY_ATTACHMENT_EXTENSIONS = new Set([
   "bmp",
   "svg",
   "webp",
+  "avif",
+  "heic",
+  "heif",
+  "jfif",
   "pdf",
 ]);
-const REPLY_ATTACHMENT_ACCEPT = ".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.pdf";
+const ALLOWED_REPLY_ATTACHMENT_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/bmp",
+  "image/svg+xml",
+  "image/webp",
+  "image/avif",
+  "image/heic",
+  "image/heif",
+  "application/pdf",
+]);
+const REPLY_ATTACHMENT_ACCEPT = ".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.avif,.heic,.heif,.jfif,.pdf";
 const MAX_REPLY_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 function validateReplyAttachments(files: File[]): string | null {
   for (const file of files) {
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-    if (!ALLOWED_REPLY_ATTACHMENT_EXTENSIONS.has(extension)) {
-      return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, PDF.`;
+    const mimeType = (file.type ?? "").toLowerCase();
+    const allowedByExtension =
+      Boolean(extension) && ALLOWED_REPLY_ATTACHMENT_EXTENSIONS.has(extension);
+    const allowedByMimeType =
+      Boolean(mimeType) && ALLOWED_REPLY_ATTACHMENT_MIME_TYPES.has(mimeType);
+    if (!allowedByExtension && !allowedByMimeType) {
+      return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, AVIF, HEIC, HEIF, PDF.`;
     }
     if (file.size > MAX_REPLY_ATTACHMENT_BYTES) {
       return `"${file.name}" is larger than 50MB.`;
@@ -340,6 +376,7 @@ function isActiveTicketStatus(status: TicketStatus): boolean {
 export default function TicketDetailsPage() {
   const params = useParams<{ ticketId: string }>();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [, setAuthSessionRevision] = useState(0);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<TicketCategoryOption[]>([]);
   const [assigneeOptions, setAssigneeOptions] = useState<TicketAssigneeOption[]>([]);
@@ -347,6 +384,7 @@ export default function TicketDetailsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState("");
+  const [replyParentId, setReplyParentId] = useState<string | null>(null);
   const [replyVisibility, setReplyVisibility] = useState<"Public" | "Internal">(
     "Public"
   );
@@ -356,6 +394,7 @@ export default function TicketDetailsPage() {
   const [isReplyDeletingId, setIsReplyDeletingId] = useState<string | null>(null);
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
   const replyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
+  const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [editingReplyAttachments, setEditingReplyAttachments] = useState<File[]>([]);
   const editingReplyAttachmentsInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingTicketContent, setIsEditingTicketContent] = useState(false);
@@ -381,6 +420,7 @@ export default function TicketDetailsPage() {
       setErrorMessage(null);
 
       try {
+        void fetchAuthenticatedUser();
         const [ticket, dependencies] = await Promise.all([
           fetchTicketDetail(params.ticketId),
           fetchTicketDependencies(),
@@ -404,6 +444,16 @@ export default function TicketDetailsPage() {
       active = false;
     };
   }, [params.ticketId]);
+
+  useEffect(() => {
+    const onAuthSessionUpdated = () => {
+      setAuthSessionRevision((prev) => prev + 1);
+    };
+    window.addEventListener(AUTH_SESSION_UPDATED_EVENT, onAuthSessionUpdated);
+    return () => {
+      window.removeEventListener(AUTH_SESSION_UPDATED_EVENT, onAuthSessionUpdated);
+    };
+  }, [setAuthSessionRevision]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -473,9 +523,38 @@ export default function TicketDetailsPage() {
     return canViewTicket(currentUser, matchedTicket) ? matchedTicket : null;
   }, [currentUser, matchedTicket]);
   const isUnauthorizedForTicket = Boolean(matchedTicket && !ticket);
+  const permissionNames = getAuthenticatedPermissionNames();
   const canManageLifecycle = canManageTicketLifecycle(currentUser);
+  const canUpdateTicketStatus =
+    permissionNames.length > 0 ? hasAuthenticatedPermission("ticket.status.update") : canManageLifecycle;
+  const canUpdateTicketDetails =
+    permissionNames.length > 0
+      ? hasAuthenticatedPermission("ticket.update")
+      : Boolean(loadAuthSession()?.accessToken);
+  const canUpdateTicketMetadata =
+    permissionNames.length > 0 ? hasAuthenticatedPermission("ticket.update") : canManageLifecycle;
   const canAssignTicketsForCurrentUser = canAssignTickets(currentUser);
   const canUseInternalNotes = canViewInternalNotes(currentUser);
+  const canCreateInternalNotes =
+    permissionNames.length > 0
+      ? hasAuthenticatedPermission("ticket.thread.internal.create")
+      : canUseInternalNotes;
+  const canCreatePublicReplies =
+    permissionNames.length > 0
+      ? hasAuthenticatedPermission("ticket.thread.create")
+      : Boolean(loadAuthSession()?.accessToken);
+  const canCreateReplies =
+    permissionNames.length > 0
+      ? canCreatePublicReplies || canCreateInternalNotes
+      : Boolean(loadAuthSession()?.accessToken);
+  const canUpdateReplies =
+    permissionNames.length > 0
+      ? hasAuthenticatedPermission("ticket.thread.update")
+      : canManageLifecycle || canUseInternalNotes;
+  const canDeleteReplies =
+    permissionNames.length > 0
+      ? hasAuthenticatedPermission("ticket.thread.delete")
+      : canManageLifecycle || canUseInternalNotes;
   const canEscalateToAdmin = ticket
     ? canEscalateTicketToAdmin(currentUser, ticket)
     : false;
@@ -488,17 +567,71 @@ export default function TicketDetailsPage() {
     });
   }, [canUseInternalNotes, ticket]);
 
+  type ReplyNode = Reply & { children: ReplyNode[] };
+
+  const replyParent = useMemo(() => {
+    if (!replyParentId) return null;
+    return visibleReplies.find((reply) => reply.id === replyParentId) ?? null;
+  }, [replyParentId, visibleReplies]);
+
+  useEffect(() => {
+    if (!replyParentId) return;
+    if (replyParent) return;
+    setReplyParentId(null);
+  }, [replyParent, replyParentId]);
+
+  const replyTree = useMemo<ReplyNode[]>(() => {
+    const nodesById = new Map<string, ReplyNode>();
+    visibleReplies.forEach((reply) => {
+      nodesById.set(reply.id, { ...reply, children: [] });
+    });
+
+    const roots: ReplyNode[] = [];
+    nodesById.forEach((node) => {
+      if (node.parentId && nodesById.has(node.parentId)) {
+        nodesById.get(node.parentId)?.children.push(node);
+        return;
+      }
+      roots.push(node);
+    });
+
+    const sortNodes = (nodes: ReplyNode[]) => {
+      nodes.sort((a, b) => parseTicketTime(b.createdAt) - parseTicketTime(a.createdAt));
+      nodes.forEach((node) => sortNodes(node.children));
+    };
+
+    sortNodes(roots);
+    return roots;
+  }, [visibleReplies]);
+
   const interactionTimeline = useMemo(
     () => (ticket ? buildInteractionTimeline(ticket) : []),
     [ticket]
   );
 
-  const canManageReplies = canManageLifecycle || canUseInternalNotes;
-  const canEditTicketContent = Boolean(loadAuthSession()?.accessToken);
+  const canEditTicketContent = canUpdateTicketDetails;
   const displayedTicketAttachments =
     ticket && canEditTicketContent && isEditingTicketContent
       ? retainedTicketAttachments
       : (ticket?.attachments ?? []);
+
+  useEffect(() => {
+    if (!canCreateReplies) return;
+    if (!canCreatePublicReplies && canCreateInternalNotes) {
+      setReplyVisibility("Internal");
+      return;
+    }
+    if (canCreatePublicReplies && !canCreateInternalNotes) {
+      setReplyVisibility("Public");
+    }
+  }, [canCreateReplies, canCreateInternalNotes, canCreatePublicReplies]);
+
+  useEffect(() => {
+    if (!replyParent) return;
+    if (replyParent.visibility !== "Internal") return;
+    if (replyVisibility === "Internal") return;
+    setReplyVisibility("Internal");
+  }, [replyParent, replyVisibility]);
 
   useEffect(() => {
     if (!ticket) return;
@@ -658,18 +791,23 @@ export default function TicketDetailsPage() {
   const addReply = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!ticket || !replyMessage.trim()) return;
-    if (replyVisibility === "Internal" && !canUseInternalNotes) return;
+    if (!canCreateReplies) return;
+    if (replyVisibility === "Public" && !canCreatePublicReplies) return;
+    if (replyVisibility === "Internal" && !canCreateInternalNotes) return;
     setIsReplySubmitting(true);
     try {
       await createTicketReply({
         ticketId: ticket.id,
         message: replyMessage.trim(),
         visibility: replyVisibility,
+        parentId: replyParentId,
         attachments: replyAttachments,
       });
       await reloadCurrentTicket(ticket.id);
       setReplyMessage("");
-      setReplyVisibility("Public");
+      if (!replyParentId) {
+        setReplyVisibility(canCreatePublicReplies ? "Public" : "Internal");
+      }
       setReplyAttachments([]);
       if (replyAttachmentsInputRef.current) {
         replyAttachmentsInputRef.current.value = "";
@@ -838,11 +976,47 @@ export default function TicketDetailsPage() {
     setTickets(nextTickets);
   };
 
-  const renderReplies = (): React.ReactNode =>
-    visibleReplies.map((reply) => {
-      const isEditing = editingReplyId === reply.id;
-      return (
-        <div key={reply.id} className="rounded-none bg-slate-50 p-2">
+  const isPersistedThreadId = (replyId: string) => {
+    const n = Number(replyId);
+    return Number.isFinite(n) && n > 0;
+  };
+
+  const canReplyInThread = (reply: Reply) => {
+    if (!canCreateReplies) return false;
+    if (!isPersistedThreadId(reply.id)) return false;
+    if (reply.visibility === "Internal" && !canCreateInternalNotes) return false;
+    return true;
+  };
+
+  const startReplyInThread = (reply: Reply) => {
+    if (!canReplyInThread(reply)) return;
+
+    setReplyParentId(reply.id);
+    if (reply.visibility === "Internal") {
+      setReplyVisibility("Internal");
+    } else {
+      setReplyVisibility(canCreatePublicReplies ? "Public" : "Internal");
+    }
+
+    window.setTimeout(() => {
+      replyTextareaRef.current?.focus();
+    }, 0);
+  };
+
+  const cancelReplyInThread = () => {
+    setReplyParentId(null);
+    setReplyVisibility(canCreatePublicReplies ? "Public" : "Internal");
+    window.setTimeout(() => {
+      replyTextareaRef.current?.focus();
+    }, 0);
+  };
+
+  const renderReplyNode = (reply: ReplyNode, depth: number): React.ReactNode => {
+    const isEditing = editingReplyId === reply.id;
+    const wrapperClass = depth > 0 ? "ml-6 border-l border-slate-200 pl-4" : "";
+    return (
+      <div key={reply.id} className={wrapperClass}>
+        <div className="rounded-none bg-slate-50 p-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-slate-500">
               {reply.author} - {reply.createdAt}
@@ -857,26 +1031,26 @@ export default function TicketDetailsPage() {
               >
                 {reply.visibility}
               </span>
-              {canManageReplies ? (
-                <>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-primary"
-                    onClick={() => startEditingReply(reply)}
-                  >
-                    <Pencil className="size-3.5" />
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-800"
-                    onClick={() => void removeReply(reply.id)}
-                    disabled={isReplyDeletingId === reply.id}
-                  >
-                    <Trash2 className="size-3.5" />
-                    {isReplyDeletingId === reply.id ? "Deleting..." : "Delete"}
-                  </button>
-                </>
+              {canUpdateReplies ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-primary"
+                  onClick={() => startEditingReply(reply)}
+                >
+                  <Pencil className="size-3.5" />
+                  Edit
+                </button>
+              ) : null}
+              {canDeleteReplies ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-800"
+                  onClick={() => void removeReply(reply.id)}
+                  disabled={isReplyDeletingId === reply.id}
+                >
+                  <Trash2 className="size-3.5" />
+                  {isReplyDeletingId === reply.id ? "Deleting..." : "Delete"}
+                </button>
               ) : null}
             </div>
           </div>
@@ -958,11 +1132,29 @@ export default function TicketDetailsPage() {
             <>
               <p className="mt-1 text-sm text-slate-700">{reply.message}</p>
               {renderReplyAttachments(reply.attachments ?? [], reply.id, openFullscreenImage)}
+              {canReplyInThread(reply) ? (
+                <button
+                  type="button"
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-primary"
+                  onClick={() => startReplyInThread(reply)}
+                >
+                  <CornerUpLeft className="size-3.5" />
+                  Reply in thread
+                </button>
+              ) : null}
             </>
           )}
         </div>
-      );
-    });
+        {reply.children.length > 0 ? (
+          <div className="mt-2 space-y-2">
+            {reply.children.map((child) => renderReplyNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderReplies = (): React.ReactNode => replyTree.map((reply) => renderReplyNode(reply, 0));
 
   if (!isHydrated) {
     return (
@@ -1009,7 +1201,7 @@ export default function TicketDetailsPage() {
                   Escalate to Admin
                 </Button>
               ) : null}
-              {ticket && canManageLifecycle ? (
+              {ticket && canUpdateTicketStatus ? (
                 <TicketStatusDropdown
                   value={ticket.status}
                   onChange={(status) => updateTicket({ status })}
@@ -1218,21 +1410,47 @@ export default function TicketDetailsPage() {
                     renderReplies()
                   )}
                 </div>
-                <form className="mt-4 border border-slate-200 bg-white" onSubmit={addReply}>
+                {canCreateReplies ? (
+                  <form className="mt-4 border border-slate-200 bg-white" onSubmit={addReply}>
                   <div className="border-t-4 border-t-primary px-4 py-4">
+                    {replyParent ? (
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-none border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-xs text-slate-600">
+                          Replying in thread to{" "}
+                          <span className="font-semibold">{replyParent.author}</span>
+                          <span className="text-slate-400"> — </span>
+                          <span className="text-slate-500">
+                            {(replyParent.message.trim().split(/\n/)[0] ?? replyParent.message)
+                              .slice(0, 90)
+                              .trim()}
+                            {(replyParent.message.trim().length ?? 0) > 90 ? "…" : ""}
+                          </span>
+                        </p>
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                          onClick={cancelReplyInThread}
+                        >
+                          Exit thread
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="flex items-end gap-6 border-b border-slate-200">
-                      <button
-                        type="button"
-                        onClick={() => setReplyVisibility("Public")}
-                        className={`pb-2 text-sm font-semibold leading-none transition-colors ${
-                          replyVisibility === "Public"
-                            ? "border-b-4 border-b-primary text-primary"
-                            : "text-slate-400 hover:text-slate-600"
-                        }`}
-                      >
-                        Public Reply
-                      </button>
-                      {canUseInternalNotes ? (
+                      {canCreatePublicReplies &&
+                      (!replyParent || replyParent.visibility === "Public") ? (
+                        <button
+                          type="button"
+                          onClick={() => setReplyVisibility("Public")}
+                          className={`pb-2 text-sm font-semibold leading-none transition-colors ${
+                            replyVisibility === "Public"
+                              ? "border-b-4 border-b-primary text-primary"
+                              : "text-slate-400 hover:text-slate-600"
+                          }`}
+                        >
+                          Public Reply
+                        </button>
+                      ) : null}
+                      {canCreateInternalNotes ? (
                         <button
                           type="button"
                           onClick={() => setReplyVisibility("Internal")}
@@ -1257,6 +1475,7 @@ export default function TicketDetailsPage() {
                         onChange={handleReplyAttachmentChange}
                       />
                       <textarea
+                        ref={replyTextareaRef}
                         className="min-h-28 w-full resize-none border-0 bg-transparent px-2 py-1 text-sm text-slate-700 placeholder:text-slate-400 focus-visible:outline-none"
                         placeholder="Type your response here..."
                         value={replyMessage}
@@ -1313,7 +1532,22 @@ export default function TicketDetailsPage() {
                       </div>
                     </div>
                   </div>
-                </form>
+                  </form>
+                ) : (
+                  <div className="mt-4 border border-slate-200 bg-white px-4 py-4">
+                    <p className="text-sm text-slate-600">
+                      You do not have permission to post replies to this ticket.
+                    </p>
+                    {permissionNames.length > 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        Required: <span className="font-semibold">ticket.thread.create</span>{" "}
+                        (public replies) or{" "}
+                        <span className="font-semibold">ticket.thread.internal.create</span>{" "}
+                        (internal notes).
+                      </p>
+                    ) : null}
+                  </div>
+                )}
               </section>
               </div>
 
@@ -1368,7 +1602,7 @@ export default function TicketDetailsPage() {
                               <p className="break-words text-slate-600">{row.value}</p>
                             )
                           ) : row.label === "Priority" ? (
-                            canManageLifecycle ? (
+                            canUpdateTicketMetadata ? (
                               <TicketPriorityDropdown
                                 fullWidth
                                 compact
@@ -1379,7 +1613,7 @@ export default function TicketDetailsPage() {
                               <p className="break-words text-slate-600">{row.value}</p>
                             )
                           ) : row.label === "Issue Type" ? (
-                            canManageLifecycle ? (
+                            canUpdateTicketMetadata ? (
                               <SidebarSelect
                                 ariaLabel="Issue type"
                                 value={ticket.category}

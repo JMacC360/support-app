@@ -37,6 +37,7 @@ type ApiTicket = {
 type ApiTicketThread = {
   id: number;
   user_id: number;
+  parent_id?: number | null;
   message: string;
   attachments: string[] | null;
   internal_notes: string | null;
@@ -122,6 +123,7 @@ function mapApiThreadToReply(thread: ApiTicketThread): Reply {
   const hasInternalNote = Boolean(thread.internal_notes && thread.internal_notes.trim());
   return {
     id: String(thread.id),
+    parentId: thread.parent_id ? String(thread.parent_id) : undefined,
     visibility: hasInternalNote ? "Internal" : "Public",
     author: thread.user?.name ?? thread.user?.email ?? `User #${thread.user_id}`,
     message: hasInternalNote ? (thread.internal_notes as string) : thread.message,
@@ -216,28 +218,31 @@ function mapApiActivityLogToTicketActivity(log: ApiActivityLog): TicketActivity 
 }
 
 export async function fetchTicketDependencies() {
-  const [categoriesResponse, usersResponse] = await Promise.all([
-    fetch(`${getApiBaseUrl()}/categories`, {
-      method: "GET",
-      headers: getJsonHeaders(),
-    }),
-    fetch(`${getApiBaseUrl()}/users`, {
-      method: "GET",
-      headers: getJsonHeaders(),
-    }),
-  ]);
+  const categoriesResponse = await fetch(`${getApiBaseUrl()}/categories`, {
+    method: "GET",
+    headers: getJsonHeaders(),
+  });
 
   if (!categoriesResponse.ok) {
     throw new Error(await parseApiError(categoriesResponse, "Unable to load categories."));
-  }
-  if (!usersResponse.ok) {
-    throw new Error(await parseApiError(usersResponse, "Unable to load users."));
   }
 
   const categories = ((await categoriesResponse.json()) as ApiCategory[]).map((category) => ({
     id: category.id,
     name: category.name,
   }));
+
+  const usersResponse = await fetch(`${getApiBaseUrl()}/users`, {
+    method: "GET",
+    headers: getJsonHeaders(),
+  });
+
+  if (!usersResponse.ok) {
+    if (usersResponse.status === 401 || usersResponse.status === 403) {
+      return { categories, assignees: [] as TicketAssigneeOption[] };
+    }
+    throw new Error(await parseApiError(usersResponse, "Unable to load users."));
+  }
 
   const usersPayload = (await usersResponse.json()) as ApiUsersResponse;
   const assignees = usersPayload.data
@@ -470,9 +475,12 @@ export async function createTicketReply(input: {
   ticketId: string;
   message: string;
   visibility: "Public" | "Internal";
+  parentId?: string | null;
   attachments?: File[];
 }) {
   const hasAttachments = Boolean(input.attachments?.length);
+  const parentIdValue = input.parentId ? Number(input.parentId) : null;
+  const hasValidParentId = parentIdValue !== null && Number.isFinite(parentIdValue) && parentIdValue > 0;
 
   const response = await fetch(`${getApiBaseUrl()}/tickets/${input.ticketId}/threads`, {
     method: "POST",
@@ -486,6 +494,9 @@ export async function createTicketReply(input: {
       ? (() => {
           const formData = new FormData();
           formData.append("message", input.message);
+          if (hasValidParentId) {
+            formData.append("parent_id", String(parentIdValue));
+          }
           if (input.visibility === "Internal") {
             formData.append("internal_notes", input.message);
           }
@@ -496,6 +507,7 @@ export async function createTicketReply(input: {
         })()
       : JSON.stringify({
           message: input.message,
+          ...(hasValidParentId ? { parent_id: parentIdValue } : {}),
           ...(input.visibility === "Internal" ? { internal_notes: input.message } : {}),
         }),
   });

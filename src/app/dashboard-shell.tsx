@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  AUTH_SESSION_UPDATED_EVENT,
   fetchAuthenticatedUser,
   getAccessToken,
   loadAuthSession,
@@ -13,7 +14,6 @@ import {
 } from "@/lib/auth";
 import {
   canAccessWorkspacePath,
-  isDemoAdmin,
   loadCurrentUser,
 } from "@/lib/tickets";
 
@@ -28,6 +28,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [authSessionRevision, setAuthSessionRevision] = useState(0);
+
+  useEffect(() => {
+    const onAuthSessionUpdated = () => {
+      setAuthSessionRevision((prev) => prev + 1);
+    };
+
+    window.addEventListener(AUTH_SESSION_UPDATED_EVENT, onAuthSessionUpdated);
+    return () => {
+      window.removeEventListener(AUTH_SESSION_UPDATED_EVENT, onAuthSessionUpdated);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -62,10 +74,45 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!ready || !currentUser) return;
+    let active = true;
+    const stableUserEmail = currentUser;
+
+    const refreshAndValidateAccess = async () => {
+      try {
+        const hydratedUser = await fetchAuthenticatedUser();
+        if (!active) return;
+        if (hydratedUser?.email) {
+          setCurrentUser(hydratedUser.email);
+        }
+      } catch {
+        // Ignore transient failures; access checks will use the last known session.
+      }
+
+      if (!active) return;
+      if (!canAccessWorkspacePath(stableUserEmail, pathname)) {
+        router.replace("/tickets");
+      }
+    };
+
+    void refreshAndValidateAccess();
+
+    const onFocus = () => {
+      void refreshAndValidateAccess();
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      active = false;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [ready, currentUser, pathname, router]);
+
+  useEffect(() => {
+    if (!ready || !currentUser) return;
     if (!canAccessWorkspacePath(currentUser, pathname)) {
       router.replace("/tickets");
     }
-  }, [ready, currentUser, pathname, router]);
+  }, [ready, currentUser, pathname, router, authSessionRevision]);
 
   if (!ready) {
     return (
@@ -86,7 +133,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const ticketsActive = pathname === "/tickets" || pathname.startsWith("/tickets/");
   const usersActive = pathname.startsWith("/users");
   const rolesActive = pathname.startsWith("/roles");
-  const hasAdminAccess = isDemoAdmin(currentUser);
+  const showUsersLink = canAccessWorkspacePath(currentUser, "/users");
+  const showRolesLink = canAccessWorkspacePath(currentUser, "/roles");
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -114,21 +162,21 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               >
                 Tickets
               </Link>
-              {hasAdminAccess ? (
-                <>
-                  <Link
-                    href="/users"
-                    className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(usersActive)}`}
-                  >
-                    Users
-                  </Link>
-                  <Link
-                    href="/roles"
-                    className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
-                  >
-                    Roles
-                  </Link>
-                </>
+              {showUsersLink ? (
+                <Link
+                  href="/users"
+                  className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(usersActive)}`}
+                >
+                  Users
+                </Link>
+              ) : null}
+              {showRolesLink ? (
+                <Link
+                  href="/roles"
+                  className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
+                >
+                  Roles
+                </Link>
               ) : null}
             </nav>
           </div>

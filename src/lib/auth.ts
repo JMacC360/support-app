@@ -9,6 +9,7 @@ type AuthUser = {
 type AuthApiResponse = {
   user: AuthUser;
   role_names?: string[];
+  permission_names?: string[];
   access_token: string;
   token_type: string;
 };
@@ -16,6 +17,7 @@ type AuthApiResponse = {
 type AuthMeResponse = {
   user: AuthUser;
   role_names?: string[];
+  permission_names?: string[];
 };
 
 type AuthErrorResponse = {
@@ -27,7 +29,10 @@ export type AuthSession = {
   user: AuthUser;
   accessToken: string;
   roleNames: string[];
+  permissionNames: string[];
 };
+
+export const AUTH_SESSION_UPDATED_EVENT = "support-ticket-app:auth-session-updated";
 
 const AUTH_SESSION_STORAGE_KEY = "support-ticket-app:auth-session";
 const LEGACY_USER_STORAGE_KEY = "support-ticket-app:user";
@@ -40,13 +45,22 @@ function isBrowser() {
   return typeof window !== "undefined";
 }
 
+function notifyAuthSessionUpdated() {
+  if (!isBrowser()) return;
+  window.dispatchEvent(new Event(AUTH_SESSION_UPDATED_EVENT));
+}
+
 function isAuthSession(value: unknown): value is AuthSession {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<AuthSession>;
   const user = candidate.user as Partial<AuthUser> | undefined;
+  const permissionNamesCandidate = (candidate as Partial<AuthSession>).permissionNames;
+  const permissionNamesValid =
+    permissionNamesCandidate === undefined || Array.isArray(permissionNamesCandidate);
   return Boolean(
     typeof candidate.accessToken === "string" &&
       Array.isArray(candidate.roleNames) &&
+      permissionNamesValid &&
       user &&
       typeof user.id === "number" &&
       typeof user.name === "string" &&
@@ -59,6 +73,14 @@ function normalizeRoleNames(roleNames: string[] | undefined) {
   return roleNames
     .filter((roleName) => typeof roleName === "string")
     .map((roleName) => roleName.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizePermissionNames(permissionNames: string[] | undefined) {
+  if (!Array.isArray(permissionNames)) return [];
+  return permissionNames
+    .filter((permissionName) => typeof permissionName === "string")
+    .map((permissionName) => permissionName.trim().toLowerCase())
     .filter(Boolean);
 }
 
@@ -83,6 +105,7 @@ export function loadAuthSession(): AuthSession | null {
         return {
           ...parsed,
           roleNames: normalizeRoleNames(parsed.roleNames),
+          permissionNames: normalizePermissionNames(parsed.permissionNames ?? []),
           user: {
             ...parsed.user,
             email: normalizeEmail(parsed.user.email),
@@ -101,6 +124,7 @@ export function loadAuthSession(): AuthSession | null {
   return {
     accessToken: "",
     roleNames: [],
+    permissionNames: [],
     user: {
       id: 0,
       name: normalizedLegacyEmail,
@@ -115,6 +139,7 @@ export function saveAuthSession(session: AuthSession) {
   const normalizedSession: AuthSession = {
     ...session,
     roleNames: normalizeRoleNames(session.roleNames),
+    permissionNames: normalizePermissionNames(session.permissionNames),
     user: {
       ...session.user,
       email: normalizeEmail(session.user.email),
@@ -123,12 +148,14 @@ export function saveAuthSession(session: AuthSession) {
 
   window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(normalizedSession));
   window.localStorage.setItem(LEGACY_USER_STORAGE_KEY, normalizedSession.user.email);
+  notifyAuthSessionUpdated();
 }
 
 export function clearAuthSession() {
   if (!isBrowser()) return;
   window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(LEGACY_USER_STORAGE_KEY);
+  notifyAuthSessionUpdated();
 }
 
 export function getAccessToken() {
@@ -151,6 +178,28 @@ export function getAuthenticatedRoleNames() {
   const session = loadAuthSession();
   if (!session?.accessToken) return [];
   return session.roleNames;
+}
+
+export function getAuthenticatedPermissionNames() {
+  const session = loadAuthSession();
+  if (!session?.accessToken) return [];
+  return session.permissionNames;
+}
+
+function permissionNamesContains(permissionNames: string[], target: string) {
+  return permissionNames.includes(target.trim().toLowerCase());
+}
+
+export function hasAuthenticatedPermission(permissionName: string) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  return permissionNamesContains(permissionNames, permissionName);
+}
+
+export function hasAnyAuthenticatedPermission(permissionNames: string[]) {
+  const activePermissionNames = getAuthenticatedPermissionNames();
+  return permissionNames.some((permissionName) =>
+    permissionNamesContains(activePermissionNames, permissionName)
+  );
 }
 
 export function isAuthenticatedAdmin() {
@@ -200,6 +249,7 @@ export async function loginWithPassword(email: string, password: string) {
     },
     accessToken: parsedPayload.access_token,
     roleNames: normalizeRoleNames(parsedPayload.role_names),
+    permissionNames: normalizePermissionNames(parsedPayload.permission_names),
   };
 
   saveAuthSession(session);
@@ -230,6 +280,10 @@ export async function fetchAuthenticatedUser() {
     payload && "role_names" in payload
       ? normalizeRoleNames(payload.role_names)
       : loadAuthSession()?.roleNames ?? [];
+  const resolvedPermissionNames =
+    payload && "permission_names" in payload
+      ? normalizePermissionNames(payload.permission_names)
+      : loadAuthSession()?.permissionNames ?? [];
 
   if (!resolvedUser?.email) return null;
 
@@ -243,6 +297,7 @@ export async function fetchAuthenticatedUser() {
         email: normalizeEmail(resolvedUser.email),
       },
       roleNames: resolvedRoleNames,
+      permissionNames: resolvedPermissionNames,
     });
   }
 

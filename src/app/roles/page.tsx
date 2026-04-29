@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Shield } from "lucide-react";
 import { PermissionSwitch } from "@/components/permission-switch";
 import { Button } from "@/components/ui/button";
+import { fetchAuthenticatedUser } from "@/lib/auth";
 import {
   fetchPermissions,
   fetchRoles,
@@ -141,6 +142,9 @@ export default function RolesConfigurationPage() {
       );
       setSelectedPermissionNames(syncedPermissionNames);
       setSavedPermissionNames(new Set(syncedPermissionNames));
+
+      // Refresh current user's session permissions (important when updating their own role).
+      await fetchAuthenticatedUser();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to save role changes.");
     } finally {

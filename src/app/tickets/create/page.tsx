@@ -20,10 +20,15 @@ import {
   type TicketCategory,
   type TicketPriority,
 } from "@/lib/tickets";
+import { getAuthenticatedPermissionNames, hasAuthenticatedPermission } from "@/lib/auth";
 
 export default function CreateTicketPage() {
   const router = useRouter();
   const currentUser = loadCurrentUser();
+  const permissionNames = getAuthenticatedPermissionNames();
+  const canSubmitTicket = canCreateTickets(currentUser);
+  const canCreateCategory =
+    permissionNames.length > 0 ? hasAuthenticatedPermission("category.create") : true;
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<TicketCategory>("Technical");
@@ -51,7 +56,23 @@ export default function CreateTicketPage() {
     "bmp",
     "svg",
     "webp",
+    "avif",
+    "heic",
+    "heif",
+    "jfif",
     "pdf",
+  ]);
+  const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/bmp",
+    "image/svg+xml",
+    "image/webp",
+    "image/avif",
+    "image/heic",
+    "image/heif",
+    "application/pdf",
   ]);
   const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
@@ -91,8 +112,13 @@ export default function CreateTicketPage() {
   const validateAttachments = (files: File[]): string | null => {
     for (const file of files) {
       const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-      if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
-        return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, PDF.`;
+      const mimeType = (file.type ?? "").toLowerCase();
+      const allowedByExtension =
+        Boolean(extension) && ALLOWED_ATTACHMENT_EXTENSIONS.has(extension);
+      const allowedByMimeType =
+        Boolean(mimeType) && ALLOWED_ATTACHMENT_MIME_TYPES.has(mimeType);
+      if (!allowedByExtension && !allowedByMimeType) {
+        return `Unsupported file type for "${file.name}". Allowed: JPG, PNG, GIF, BMP, SVG, WEBP, AVIF, HEIC, HEIF, PDF.`;
       }
       if (file.size > MAX_ATTACHMENT_BYTES) {
         return `"${file.name}" is larger than 50MB.`;
@@ -386,7 +412,7 @@ export default function CreateTicketPage() {
                 name="ticket_attachments"
                 className="hidden"
                 multiple
-                accept=".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.pdf"
+                accept=".jpeg,.jpg,.png,.gif,.bmp,.svg,.webp,.avif,.heic,.heif,.jfif,.pdf"
                 onChange={onAttachmentChange}
               />
               <div className="flex flex-col items-center justify-center text-center">
@@ -452,17 +478,19 @@ export default function CreateTicketPage() {
                   >
                     Category
                   </label>
-                  <button
-                    type="button"
-                    className="inline-flex size-6 items-center justify-center border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    onClick={() => {
-                      setCategoryPanelError(null);
-                      setIsCategoryPanelOpen(true);
-                    }}
-                    aria-label="Create new category"
-                  >
-                    <Plus className="size-3.5" />
-                  </button>
+                  {canCreateCategory ? (
+                    <button
+                      type="button"
+                      className="inline-flex size-6 items-center justify-center border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                      onClick={() => {
+                        setCategoryPanelError(null);
+                        setIsCategoryPanelOpen(true);
+                      }}
+                      aria-label="Create new category"
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                  ) : null}
                 </div>
                 <select
                   id="category"
@@ -542,7 +570,7 @@ export default function CreateTicketPage() {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={isSubmitting || !hasCategoryOptions}
+                  disabled={isSubmitting || !hasCategoryOptions || !canSubmitTicket}
                 >
                   {isSubmitting ? "Submitting..." : "Submit Ticket"}
                 </Button>

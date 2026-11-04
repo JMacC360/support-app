@@ -7,6 +7,7 @@ import {
   isAuthenticatedAdminForEmail,
   loadAuthSession,
   saveAuthSession,
+  isAuthenticatedSuperAdminForEmail,
 } from "@/lib/auth";
 
 export type TicketPriority = string;
@@ -879,11 +880,17 @@ export function canAccessWorkspacePath(
     if (pathname.startsWith("/roles")) {
       return hasAnyAuthenticatedPermission(["role.view", "permission.view"]);
     }
+    if (pathname.startsWith("/locations")) {
+      return isAuthenticatedSuperAdminForEmail(userEmail);
+    }
     return false;
   }
   const accessLevel = getUserAccessLevel(userEmail);
   if (!accessLevel) return pathname.startsWith("/tickets");
   if (pathname.startsWith("/tickets")) return true;
+  if (pathname.startsWith("/locations")) {
+    return accessLevel === "Admin" && isAuthenticatedSuperAdminForEmail(userEmail);
+  }
   if (pathname.startsWith("/users") || pathname.startsWith("/roles")) {
     return accessLevel === "Admin";
   }

@@ -133,8 +133,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const ticketsActive = pathname === "/tickets" || pathname.startsWith("/tickets/");
   const usersActive = pathname.startsWith("/users");
   const rolesActive = pathname.startsWith("/roles");
+  const locationsActive = pathname.startsWith("/locations");
   const showUsersLink = canAccessWorkspacePath(currentUser, "/users");
   const showRolesLink = canAccessWorkspacePath(currentUser, "/roles");
+  const showLocationsLink = canAccessWorkspacePath(currentUser, "/locations");
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -176,6 +178,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(rolesActive)}`}
                 >
                   Roles
+                </Link>
+              ) : null}
+              {showLocationsLink ? (
+                <Link
+                  href="/locations"
+                  className={`rounded-none border-b-4 px-1 py-1.5 text-base transition-colors ${navClass(locationsActive)}`}
+                >
+                  Locations
                 </Link>
               ) : null}
             </nav>

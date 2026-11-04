@@ -202,6 +202,18 @@ export function hasAnyAuthenticatedPermission(permissionNames: string[]) {
   );
 }
 
+export function isAuthenticatedSuperAdmin() {
+  const roleNames = getAuthenticatedRoleNames();
+  return roleNamesContains(roleNames, "super-admin");
+}
+
+export function isAuthenticatedSuperAdminForEmail(email: string | null | undefined) {
+  const session = loadAuthSession();
+  if (!session?.accessToken || !email) return false;
+  if (normalizeEmail(session.user.email) !== normalizeEmail(email)) return false;
+  return roleNamesContains(session.roleNames, "super-admin");
+}
+
 export function isAuthenticatedAdmin() {
   const roleNames = getAuthenticatedRoleNames();
   return roleNamesContains(roleNames, "super-admin") || roleNamesContains(roleNames, "admin");

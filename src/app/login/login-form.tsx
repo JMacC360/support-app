@@ -88,10 +88,11 @@ export function LoginForm() {
         <Image
           src="/esarisari-support-desk-logo-standard.png"
           alt="eSariSari"
-          width={180}
-          height={150}
-          className="mx-auto block w-full max-w-[280px] leading-none"
+          width={930}
+          height={263}
+          className="mx-auto block h-auto w-full max-w-[280px]"
           priority
+          unoptimized
         />
         <h1 className="mt-3 text-center text-2xl font-semibold tracking-tight text-slate-900">
           Sign in

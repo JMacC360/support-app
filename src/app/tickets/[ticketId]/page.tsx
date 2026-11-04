@@ -25,7 +25,6 @@ import {
   canManageTicketLifecycle,
   canViewInternalNotes,
   canViewTicket,
-  categories,
   getTicketLastActivity,
   loadCurrentUser,
   type Reply,
@@ -1622,12 +1621,9 @@ export default function TicketDetailsPage() {
                                     category: v as TicketCategory,
                                   })
                                 }
-                                options={(categoryOptions.length
-                                  ? categoryOptions.map((entry) => entry.name)
-                                  : categories
-                                ).map((c) => ({
-                                  value: c,
-                                  label: c,
+                                options={categoryOptions.map((entry) => ({
+                                  value: entry.name,
+                                  label: entry.name,
                                 }))}
                               />
                             ) : (

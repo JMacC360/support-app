@@ -13,7 +13,6 @@ import {
 } from "@/lib/tickets-api";
 import {
   canCreateTickets,
-  categories,
   loadCurrentUser,
   priorities,
   type Role,
@@ -499,9 +498,9 @@ export default function CreateTicketPage() {
                   onChange={(event) => setCategory(event.target.value as TicketCategory)}
                   disabled={!hasCategoryOptions}
                 >
-                  {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((value) => (
-                    <option key={value} value={value}>
-                      {value}
+                  {categoryOptions.map((item) => (
+                    <option key={item.id} value={item.name}>
+                      {item.name}
                     </option>
                   ))}
                 </select>

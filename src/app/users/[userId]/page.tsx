@@ -60,6 +60,7 @@ export default function UserDetailsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [rolesWarningMessage, setRolesWarningMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [user, setUser] = useState<UserRecord | null>(null);
@@ -92,10 +93,24 @@ export default function UserDetailsPage() {
     const load = async () => {
       setIsLoading(true);
       setErrorMessage(null);
+      setRolesWarningMessage(null);
       setSuccessMessage(null);
 
       try {
-        const [loadedUser, loadedRoles] = await Promise.all([fetchUserById(userId), fetchRoles()]);
+        const loadedUser = await fetchUserById(userId);
+        if (!active) return;
+
+        let loadedRoles: ApiRole[] = [];
+        try {
+          loadedRoles = await fetchRoles();
+        } catch (error) {
+          if (!active) return;
+          setRolesWarningMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load roles for this user."
+          );
+        }
         if (!active) return;
 
         const parsedName = splitFullName(loadedUser.name);
@@ -106,14 +121,18 @@ export default function UserDetailsPage() {
         setFirstName(parsedName.firstName);
         setLastName(parsedName.lastName);
         setEmail(loadedUser.email);
-        setRoleOptions(roleNames);
+        setRoleOptions(roleNames.length > 0 ? roleNames : loadedUser.roleNames);
         setRole(fallbackRole);
         setIsActive(loadedUser.isActive);
         setRolePermissionMap(
-          loadedRoles.reduce<Record<string, Set<string>>>((acc, roleEntry: ApiRole) => {
-            acc[roleEntry.name] = new Set(roleEntry.permissions.map((permission) => permission.name));
-            return acc;
-          }, {})
+          loadedRoles.length > 0
+            ? loadedRoles.reduce<Record<string, Set<string>>>((acc, roleEntry: ApiRole) => {
+                acc[roleEntry.name] = new Set(
+                  roleEntry.permissions.map((permission) => permission.name)
+                );
+                return acc;
+              }, {})
+            : {}
         );
       } catch (error) {
         if (!active) return;
@@ -146,6 +165,7 @@ export default function UserDetailsPage() {
     [firstName, lastName]
   );
 
+  const canLoadRoles = roleOptions.length > 0 && Object.keys(rolePermissionMap).length > 0;
   const selectedRolePermissions = useMemo(() => rolePermissionMap[role] ?? new Set<string>(), [role, rolePermissionMap]);
   const visiblePermissionNames = useMemo(
     () =>
@@ -186,8 +206,8 @@ export default function UserDetailsPage() {
       const updatedUser = await updateUser(user.id, {
         name: fullName,
         email: normalizedEmail,
-        roles: [role],
         is_active: isActive,
+        ...(canLoadRoles ? { roles: [role] } : {}),
         ...(normalizedPassword
           ? {
               password: normalizedPassword,
@@ -443,6 +463,7 @@ export default function UserDetailsPage() {
                       value={role}
                       onChange={(event) => setRole(event.target.value)}
                       required
+                      disabled={!canLoadRoles}
                     >
                       {roleOptions.map((roleName) => (
                         <option key={roleName} value={roleName}>
@@ -450,6 +471,11 @@ export default function UserDetailsPage() {
                         </option>
                       ))}
                     </select>
+                    {!canLoadRoles && rolesWarningMessage ? (
+                      <p className="text-xs text-amber-700">
+                        Role options are unavailable: {rolesWarningMessage}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="space-y-1.5">
                     <label
@@ -526,11 +552,16 @@ export default function UserDetailsPage() {
                   <h3 className="text-xl font-semibold">Permissions</h3>
                 </div>
                 <div className="space-y-2">
-                  {visiblePermissionNames.length === 0 ? (
+                  {!canLoadRoles && rolesWarningMessage ? (
+                    <p className="border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                      Unable to load role permissions: {rolesWarningMessage}
+                    </p>
+                  ) : null}
+                  {canLoadRoles && visiblePermissionNames.length === 0 ? (
                     <p className="border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
                       No enabled permissions for this role.
                     </p>
-                  ) : (
+                  ) : canLoadRoles ? (
                     visiblePermissionNames.map((permissionName) => (
                       <div
                         key={permissionName}
@@ -547,7 +578,7 @@ export default function UserDetailsPage() {
                         />
                       </div>
                     ))
-                  )}
+                  ) : null}
                 </div>
                 <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                   Showing enabled permissions for selected role

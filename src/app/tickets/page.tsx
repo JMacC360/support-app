@@ -6,10 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 import { SidebarSelect } from "@/components/sidebar-select";
 import { TicketTableStatus } from "@/components/ticket-table-status";
 import { Button } from "@/components/ui/button";
-import { fetchTickets } from "@/lib/tickets-api";
+import { fetchTicketDependencies, fetchTickets } from "@/lib/tickets-api";
 import {
   canCreateTickets,
-  categories,
   getVisibleTicketsForUser,
   loadCurrentUser,
   priorities,
@@ -63,6 +62,7 @@ export default function TicketsPage() {
   const [statusFilter, setStatusFilter] = useState<"All" | TicketStatus>("All");
   const [categoryFilter, setCategoryFilter] = useState<"All" | TicketCategory>("All");
   const [priorityFilter, setPriorityFilter] = useState<"All" | TicketPriority>("All");
+  const [categoryOptions, setCategoryOptions] = useState<TicketCategory[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
@@ -73,9 +73,13 @@ export default function TicketsPage() {
     const load = async () => {
       setCurrentUser(loadCurrentUser());
       try {
-        const loadedTickets = await fetchTickets();
+        const [loadedTickets, dependencies] = await Promise.all([
+          fetchTickets(),
+          fetchTicketDependencies(),
+        ]);
         if (!active) return;
         setTickets(loadedTickets);
+        setCategoryOptions(dependencies.categories.map((entry) => entry.name));
       } catch (error) {
         if (!active) return;
         setErrorMessage(error instanceof Error ? error.message : "Unable to load tickets.");
@@ -90,6 +94,12 @@ export default function TicketsPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (categoryFilter === "All") return;
+    if (categoryOptions.includes(categoryFilter)) return;
+    setCategoryFilter("All");
+  }, [categoryFilter, categoryOptions]);
 
   const visibleTickets = useMemo(
     () => getVisibleTicketsForUser(currentUser, tickets),
@@ -258,7 +268,7 @@ export default function TicketsPage() {
                       wrapperClassName="border-slate-300 w-auto min-w-0"
                       options={[
                         { value: "All", label: "All Categories" },
-                        ...categories.map((value) => ({
+                        ...categoryOptions.map((value) => ({
                           value,
                           label: value,
                         })),

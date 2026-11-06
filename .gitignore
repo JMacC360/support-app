@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+webapp_files.tgz
 
 # debug
 npm-debug.log*
@@ -32,6 +33,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+
+# cursor agent docs
+/AGENTS.md
+/CLAUDE.md
+.cursor/
 
 # vercel
 .vercel

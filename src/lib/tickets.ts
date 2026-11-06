@@ -1,9 +1,13 @@
 import {
   clearAuthSession,
   getAuthenticatedUserEmail,
+  getAuthenticatedPermissionNames,
+  hasAnyAuthenticatedPermission,
+  hasAuthenticatedPermission,
   isAuthenticatedAdminForEmail,
   loadAuthSession,
   saveAuthSession,
+  isAuthenticatedSuperAdminForEmail,
 } from "@/lib/auth";
 
 export type TicketPriority = string;
@@ -692,6 +696,7 @@ export function saveCurrentUser(user: string) {
   saveAuthSession({
     accessToken: existingSession?.accessToken ?? "",
     roleNames: existingSession?.roleNames ?? [],
+    permissionNames: existingSession?.permissionNames ?? [],
     user: {
       id: existingSession?.user.id ?? 0,
       name: existingSession?.user.name ?? normalizedEmail,
@@ -782,20 +787,40 @@ export function getCurrentUserContext(userEmail: string | null | undefined) {
 }
 
 export function canCreateTickets(userEmail: string | null | undefined) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0) {
+    return hasAuthenticatedPermission("ticket.create");
+  }
   return Boolean(userEmail);
 }
 
 export function canAssignTickets(userEmail: string | null | undefined) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0) {
+    // Assignment is currently treated as part of ticket update.
+    return hasAuthenticatedPermission("ticket.update");
+  }
   const accessLevel = getUserAccessLevel(userEmail);
   return accessLevel === "Admin" || accessLevel === "Support Team Lead";
 }
 
 export function canManageTicketLifecycle(userEmail: string | null | undefined) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0) {
+    return hasAuthenticatedPermission("ticket.status.update");
+  }
   const accessLevel = getUserAccessLevel(userEmail);
   return accessLevel === "Admin" || accessLevel === "Support Team Lead";
 }
 
 export function canViewInternalNotes(userEmail: string | null | undefined) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0) {
+    return hasAnyAuthenticatedPermission([
+      "ticket.thread.internal.view",
+      "ticket.thread.internal.create",
+    ]);
+  }
   const accessLevel = getUserAccessLevel(userEmail);
   return accessLevel === "Admin" || accessLevel === "Support Team Lead";
 }
@@ -804,6 +829,10 @@ export function canViewTicket(
   userEmail: string | null | undefined,
   ticket: Ticket
 ) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0 && !hasAuthenticatedPermission("ticket.view")) {
+    return false;
+  }
   const user = getCurrentUserContext(userEmail);
   if (!user && userEmail) return true;
   if (!user) return false;
@@ -844,9 +873,24 @@ export function canAccessWorkspacePath(
   userEmail: string | null | undefined,
   pathname: string
 ) {
+  const permissionNames = getAuthenticatedPermissionNames();
+  if (permissionNames.length > 0) {
+    if (pathname.startsWith("/tickets")) return hasAuthenticatedPermission("ticket.view");
+    if (pathname.startsWith("/users")) return hasAuthenticatedPermission("user.view");
+    if (pathname.startsWith("/roles")) {
+      return hasAnyAuthenticatedPermission(["role.view", "permission.view"]);
+    }
+    if (pathname.startsWith("/locations")) {
+      return isAuthenticatedSuperAdminForEmail(userEmail);
+    }
+    return false;
+  }
   const accessLevel = getUserAccessLevel(userEmail);
   if (!accessLevel) return pathname.startsWith("/tickets");
   if (pathname.startsWith("/tickets")) return true;
+  if (pathname.startsWith("/locations")) {
+    return accessLevel === "Admin" && isAuthenticatedSuperAdminForEmail(userEmail);
+  }
   if (pathname.startsWith("/users") || pathname.startsWith("/roles")) {
     return accessLevel === "Admin";
   }
